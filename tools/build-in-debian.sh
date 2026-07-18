@@ -149,9 +149,15 @@ test -f "/work/binary-source/amd64/$runfile"
 printf '%s  %s\n' "$sha256" "/work/binary-source/amd64/$runfile" | sha256sum -c -
 
 cd /work/binary-source
-tests/no-390xx-leaks.sh
-tests/amd64-only.sh
-tests/generated-control-drift.sh
+stat -c '%A %a %n' \
+    tests/no-390xx-leaks.sh \
+    tests/amd64-only.sh \
+    tests/generated-control-drift.sh \
+    > /work/logs/extracted-script-modes.txt
+cat /work/logs/extracted-script-modes.txt
+sh tests/no-390xx-leaks.sh
+sh tests/amd64-only.sh
+sh tests/generated-control-drift.sh
 
 set_stage binary-build
 set +e
