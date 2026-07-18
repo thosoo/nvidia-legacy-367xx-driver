@@ -43,11 +43,13 @@ sh "./$file" --extract-only
 mkdir -p amd64 "$topdir"
 cp "$file" "amd64/$file"
 
-tar --sort=name --owner=0 --group=0 --numeric-owner -caf "$tmp_main" "$topdir"
-tar --sort=name --owner=0 --group=0 --numeric-owner -caf "$tmp_amd64" amd64
+tar --sort=name --owner=0 --group=0 --numeric-owner -cJf "$tmp_main" "$topdir"
+tar --sort=name --owner=0 --group=0 --numeric-owner -cJf "$tmp_amd64" amd64
 
 test -s "$tmp_main"
 test -s "$tmp_amd64"
+xz -t < "$tmp_main"
+xz -t < "$tmp_amd64"
 tar -tf "$tmp_main" > "$main_listing"
 tar -tf "$tmp_amd64" > "$amd64_listing"
 if ! grep -Fx "$topdir/" "$main_listing" >/dev/null || [ "$(wc -l < "$main_listing")" -ne 1 ]; then

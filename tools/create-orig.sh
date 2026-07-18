@@ -14,6 +14,8 @@ mkdir -p "$out/import"
 "$repo/debian/scripts/fetch-367.134-runfile" "$out/import" "$out"
 test -s "$main"
 test -s "$amd64"
+xz -t < "$main"
+xz -t < "$amd64"
 printf '%s\n' "== $main"
 tar -tvf "$main" | sed -n '1,80p'
 tar -tf "$main" | grep -Fx "${source}-${version}/" >/dev/null

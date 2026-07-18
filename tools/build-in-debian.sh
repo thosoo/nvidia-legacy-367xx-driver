@@ -53,7 +53,7 @@ set +e
         ca-certificates curl make perl ripgrep git build-essential \
         debhelper-compat devscripts dpkg-dev dh-dkms dkms quilt xz-utils \
         linux-headers-amd64 lintian libvulkan1 po-debconf libglvnd-dev \
-        libxext6 kmod
+        libxext6 kmod file
 } > /work/logs/dependencies.log 2>&1
 dependency_status=$?
 set -e
@@ -94,6 +94,9 @@ test "$fetch_status" -eq 0
 set_stage verify-orig
 test -s "/work/$main_orig"
 test -s "/work/$amd64_orig"
+file "/work/$main_orig" "/work/$amd64_orig" > /work/logs/orig-file-types.txt
+xz -t < "/work/$main_orig"
+xz -t < "/work/$amd64_orig"
 tar -tf "/work/$main_orig" > /work/logs/main-orig-contents.txt
 tar -tf "/work/$amd64_orig" > /work/logs/amd64-orig-contents.txt
 grep -Fx "${source}-${version}/" /work/logs/main-orig-contents.txt
