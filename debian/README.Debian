@@ -1,0 +1,4 @@
+NVIDIA legacy 367xx for Debian
+==============================
+
+This package targets amd64 GRID K1 systems requiring NVIDIA 367.134 and CUDA Toolkit 8.0.44. It relies on DKMS; install matching `linux-headers-*` for every kernel that should receive modules. Secure Boot users must enroll a DKMS/MOK signing key through Debian's standard mechanism.
