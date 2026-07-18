@@ -12,17 +12,18 @@ base=NVIDIA-Linux-${arch}-${version}
 file=${base}.run
 url=https://us.download.nvidia.com/XFree86/Linux-x86_64/${version}/${file}
 sha256=c621c6068c1d09a88a4159963093fa1a28b45c7c989280c273c7d7a2b566c62f
-import_dir=$1
-output_dir=$2
+import_dir=$(readlink -m "$1")
+output_dir=$(readlink -m "$2")
 orig=nvidia-graphics-drivers-legacy-367xx_${version}.orig-amd64.tar.xz
+final_orig=${output_dir%/}/$orig
 
+mkdir -p "$import_dir" "$output_dir"
 tmp_orig=$(mktemp "${output_dir%/}/.${orig}.tmp.XXXXXX")
 cleanup() {
     rm -f "$tmp_orig"
 }
 trap cleanup EXIT INT TERM
 
-mkdir -p "$import_dir" "$output_dir"
 cd "$import_dir"
 
 if [ ! -f "$file" ]; then
@@ -35,6 +36,12 @@ sh "./$file" --extract-only
 mkdir -p amd64
 cp "$file" "amd64/$file"
 tar --sort=name --owner=0 --group=0 --numeric-owner -caf "$tmp_orig" amd64
-mv "$tmp_orig" "${output_dir%/}/$orig"
+mv "$tmp_orig" "$final_orig"
 trap - EXIT INT TERM
-printf 'created %s\n' "${output_dir%/}/$orig"
+
+if ! test -s "$final_orig" || ! tar -tf "$final_orig" | grep -Fx "amd64/$file" >/dev/null; then
+    rm -f "$final_orig"
+    echo "failed to verify $final_orig" >&2
+    exit 1
+fi
+printf 'created %s\n' "$final_orig"

@@ -28,15 +28,14 @@ jobs:
             sh /repo/tools/build-in-debian.sh bookworm /repo /out
       - name: Guard Bookworm diagnostic artifact contents
         if: always()
-        run: |
-          test ! -d ci-results/bookworm/logs || \
-          ! find ci-results/bookworm/logs -type f \( -name 'NVIDIA-Linux-*.run' -o -name '*.ko' -o -name '*.ko.*' -o -name '*.deb' -o -name '*.dsc' -o -name '*.changes' -o -name '*.buildinfo' -o -name '*.orig*.tar.*' -o -name '*.so' -o -name '*.so.*' \) -print | grep .
+        run: tests/no-uploaded-proprietary-artifacts.sh ci-results/bookworm/logs
       - name: Upload Bookworm diagnostics
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: build-logs-bookworm
           path: ci-results/bookworm/logs/
+          if-no-files-found: error
   trixie-package:
     name: trixie-package
     runs-on: ubuntu-latest
@@ -52,12 +51,11 @@ jobs:
             sh /repo/tools/build-in-debian.sh trixie /repo /out
       - name: Guard Trixie diagnostic artifact contents
         if: always()
-        run: |
-          test ! -d ci-results/trixie/logs || \
-          ! find ci-results/trixie/logs -type f \( -name 'NVIDIA-Linux-*.run' -o -name '*.ko' -o -name '*.ko.*' -o -name '*.deb' -o -name '*.dsc' -o -name '*.changes' -o -name '*.buildinfo' -o -name '*.orig*.tar.*' -o -name '*.so' -o -name '*.so.*' \) -print | grep .
+        run: tests/no-uploaded-proprietary-artifacts.sh ci-results/trixie/logs
       - name: Upload Trixie diagnostics
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: build-logs-trixie
           path: ci-results/trixie/logs/
+          if-no-files-found: error
