@@ -11,7 +11,8 @@ repository=$(readlink -f "$2")
 out=$(readlink -m "$3")
 version=367.134
 source=nvidia-graphics-drivers-legacy-367xx
-orig=${source}_${version}.orig-amd64.tar.xz
+main_orig=${source}_${version}.orig.tar.xz
+amd64_orig=${source}_${version}.orig-amd64.tar.xz
 runfile=NVIDIA-Linux-x86_64-${version}.run
 sha256=c621c6068c1d09a88a4159963093fa1a28b45c7c989280c273c7d7a2b566c62f
 current_stage=initialize
@@ -91,10 +92,19 @@ printf '%s\n' "$fetch_status" > /work/logs/fetch.exit
 test "$fetch_status" -eq 0
 
 set_stage verify-orig
-test -s "/work/$orig"
-tar -tf "/work/$orig" > /work/logs/orig-contents.txt
-grep -Fx "amd64/$runfile" /work/logs/orig-contents.txt
-sha256sum "/work/$orig" > /work/logs/orig-tarball.sha256
+test -s "/work/$main_orig"
+test -s "/work/$amd64_orig"
+tar -tf "/work/$main_orig" > /work/logs/main-orig-contents.txt
+tar -tf "/work/$amd64_orig" > /work/logs/amd64-orig-contents.txt
+grep -Fx "${source}-${version}/" /work/logs/main-orig-contents.txt
+test "$(wc -l < /work/logs/main-orig-contents.txt)" -eq 1
+if grep -E 'NVIDIA-Linux-.*\.run|\.ko(\..*)?$|\.so(\..*)?$' /work/logs/main-orig-contents.txt; then
+    echo "primary orig unexpectedly contains proprietary payload" >&2
+    exit 1
+fi
+grep -Fx "amd64/$runfile" /work/logs/amd64-orig-contents.txt
+sha256sum "/work/$main_orig" > /work/logs/main-orig.sha256
+sha256sum "/work/$amd64_orig" > /work/logs/amd64-orig.sha256
 find "/work/import/NVIDIA-Linux-x86_64-$version" -type f -printf '%P\n' | sort > /work/logs/inventory-367.134.txt
 
 cd /work/packaging
