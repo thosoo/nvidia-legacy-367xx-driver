@@ -1,0 +1,21 @@
+#!/bin/sh
+set -eu
+module=nvidia-legacy-367xx
+version=367.134
+printf '%-32s %-8s %-10s %-10s %-20s %s\n' kernel headers dkms_add dkms_build modules modinfo
+if ! command -v dkms >/dev/null; then echo "dkms not installed" >&2; exit 77; fi
+found=0
+for build in /lib/modules/*/build; do
+  [ -e "$build" ] || continue
+  kernel=${build#/lib/modules/}; kernel=${kernel%/build}
+  headers=no; [ -d "$build" ] && headers=yes
+  [ "$headers" = yes ] || { printf '%-32s %-8s %-10s %-10s %-20s %s\n' "$kernel" no skipped skipped none none; continue; }
+  found=1
+  add=ok; dkms add -m "$module" -v "$version" >/tmp/dkms-add-$kernel.log 2>&1 || add=fail:/tmp/dkms-add-$kernel.log
+  buildres=ok; dkms build -m "$module" -v "$version" -k "$kernel" >/tmp/dkms-build-$kernel.log 2>&1 || buildres=fail:/tmp/dkms-build-$kernel.log
+  mods=$(find /var/lib/dkms/$module/$version/$kernel -name '*.ko' -printf '%f,' 2>/dev/null | sed 's/,$//')
+  info=not-run
+  if [ "$buildres" = ok ]; then modinfo -k "$kernel" "nvidia-legacy-367xx" >/tmp/modinfo-$kernel.log 2>&1 && info=ok || info=fail:/tmp/modinfo-$kernel.log; fi
+  printf '%-32s %-8s %-10s %-10s %-20s %s\n' "$kernel" yes "$add" "$buildres" "${mods:-none}" "$info"
+done
+[ "$found" = 1 ] || { echo "No installed kernel headers found under /lib/modules/*/build" >&2; exit 77; }

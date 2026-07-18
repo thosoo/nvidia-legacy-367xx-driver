@@ -1,0 +1,13 @@
+name: debian-package-static
+on: [push, pull_request]
+jobs:
+  static:
+    runs-on: ubuntu-latest
+    container: debian:trixie
+    steps:
+      - uses: actions/checkout@v4
+      - run: apt-get update && apt-get install -y --no-install-recommends ripgrep make perl dpkg-dev debhelper dh-dkms quilt xz-utils lintian ca-certificates
+      - run: tests/no-390xx-leaks.sh
+      - run: '! find . -name "NVIDIA-Linux-*.run" -o -name "*.ko" | grep .'
+      - run: make -f debian/rules debian/control || test -f debian/control
+      - run: git diff --exit-code debian/control debian/control.md5sum

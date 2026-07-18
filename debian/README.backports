@@ -1,0 +1,17 @@
+NVIDIA 367.134 backport provenance
+===================================
+
+Debian baseline: nvidia-graphics-drivers.git tag 390xx/debian/390.157-15, commit 973fe487e2cf931bb9d1a74ccb80fc74c3bcd033.
+ELRepo reference: packages.git commit cd06c60f50557ce7ced6fc309a9c8407942537b3.
+NVIDIA 367.134 runfile URL: https://us.download.nvidia.com/XFree86/Linux-x86_64/367.134/NVIDIA-Linux-x86_64-367.134.run
+SHA-256: c621c6068c1d09a88a4159963093fa1a28b45c7c989280c273c7d7a2b566c62f
+
+Patch map
+---------
+
+No ELRepo kernel patch has been imported in this checkpoint. The UVM RB-tree patch is deliberately not imported until the recursion hazard in uvm_gpu_instance_ptr_to_user_channel() is reviewed against NVIDIA 390 sources and covered by tests. Candidate files for future import are:
+
+* nvidia-367xx-kmod/el8/nvidia-367xx-buildfix-el8_10.patch
+* nvidia-367xx-kmod/el8/nvidia-367xx-backport-390xx-uvm.patch
+* nvidia-367xx-kmod/el8/nvidia-367xx-kmod.spec
+* nvidia-x11-drv-367xx/el8/nvidia-x11-drv-367xx.spec
