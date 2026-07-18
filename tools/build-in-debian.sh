@@ -167,6 +167,21 @@ set -e
 cat /work/logs/binary-build.log
 printf '%s\n' "$binary_status" > /work/logs/binary-build.exit
 
+find /work/binary-source -type f -name '*.rej' -print > /work/logs/quilt-reject-files.txt || true
+{
+    QUILT_PATCHES=debian/patches QUILT_SERIES=series-postunpack quilt applied 2>&1 || true
+    echo '--- unapplied ---'
+    QUILT_PATCHES=debian/patches QUILT_SERIES=series-postunpack quilt unapplied 2>&1 || true
+} > /work/logs/quilt-state.txt
+: > /work/logs/quilt-reject-contents.txt
+while IFS= read -r reject; do
+    test -n "$reject" || continue
+    {
+        printf '\n===== %s =====\n' "$reject"
+        cat "$reject"
+    } >> /work/logs/quilt-reject-contents.txt
+done < /work/logs/quilt-reject-files.txt
+
 grep -n -E 'kernel-source-tree|CC \[M\]|CONFTEST|nvidia-uvm|nvidia-drm|nvidia-modeset|nv-linux' /work/logs/binary-build.log > /work/logs/kernel-build-progress.txt || true
 if test -s /work/logs/kernel-build-progress.txt; then
     echo yes > /work/logs/kernel-compilation-reached.txt
