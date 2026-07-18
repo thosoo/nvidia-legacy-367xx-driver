@@ -1,0 +1,20 @@
+NVIDIA 367.134 packaging differences
+====================================
+
+This source package is derived from Debian's legacy 390xx packaging baseline,
+but the proprietary payload is NVIDIA 367.134 for amd64 only.  The package
+manifests must be audited against the 367.134 runfile inventory before a binary
+package set is released.
+
+Known differences from the 390.157 baseline to preserve during that audit:
+
+* Only the amd64 NVIDIA-Linux-x86_64-367.134.run component is imported; i386,
+  armhf, arm64, and ppc64el binary packages are intentionally unsupported.
+* Linux 6.12 support is not advertised until the complete DKMS matrix has built
+  nvidia, nvidia-modeset, nvidia-drm, and nvidia-uvm on Debian Bookworm 6.1 and
+  Debian Trixie 6.12 headers.
+* The ELRepo UVM radix-tree replacement is deferred unless it is split into
+  audited quilt patches and the published self-recursive user-channel lookup
+  hunk is corrected against NVIDIA 390.157 semantics.
+* Newer 390-series-only userspace components must be removed from generated
+  manifests unless the exact file is present in the 367.134 inventory.

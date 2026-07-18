@@ -1,13 +1,63 @@
-name: debian-package-static
+name: debian-package-build
 on: [push, pull_request]
 jobs:
   static:
+    name: static
     runs-on: ubuntu-latest
     container: debian:trixie
     steps:
       - uses: actions/checkout@v4
-      - run: apt-get update && apt-get install -y --no-install-recommends ripgrep make perl dpkg-dev debhelper dh-dkms quilt xz-utils lintian ca-certificates
+      - run: apt-get update && apt-get install -y --no-install-recommends ripgrep make perl dpkg-dev debhelper dh-dkms quilt xz-utils ca-certificates git
       - run: tests/no-390xx-leaks.sh
-      - run: '! find . -name "NVIDIA-Linux-*.run" -o -name "*.ko" | grep .'
-      - run: make -f debian/rules debian/control || test -f debian/control
-      - run: git diff --exit-code debian/control debian/control.md5sum
+      - run: tests/amd64-only.sh
+      - run: tests/no-proprietary-artifacts.sh
+      - run: tests/generated-control-drift.sh
+      - run: test -z "$(git status --porcelain)"
+  bookworm-package:
+    name: bookworm-package
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build on Bookworm
+        run: |
+          mkdir -p ci-results/bookworm
+          docker run --rm \
+            -v "$PWD:/repo:ro" \
+            -v "$PWD/ci-results/bookworm:/out:rw" \
+            debian:bookworm \
+            sh /repo/tools/build-in-debian.sh bookworm /repo /out
+      - name: Guard Bookworm diagnostic artifact contents
+        if: always()
+        run: |
+          test ! -d ci-results/bookworm/logs || \
+          ! find ci-results/bookworm/logs -type f \( -name 'NVIDIA-Linux-*.run' -o -name '*.ko' -o -name '*.ko.*' -o -name '*.deb' -o -name '*.dsc' -o -name '*.changes' -o -name '*.buildinfo' -o -name '*.orig*.tar.*' -o -name '*.so' -o -name '*.so.*' \) -print | grep .
+      - name: Upload Bookworm diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-logs-bookworm
+          path: ci-results/bookworm/logs/
+  trixie-package:
+    name: trixie-package
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build on Trixie
+        run: |
+          mkdir -p ci-results/trixie
+          docker run --rm \
+            -v "$PWD:/repo:ro" \
+            -v "$PWD/ci-results/trixie:/out:rw" \
+            debian:trixie \
+            sh /repo/tools/build-in-debian.sh trixie /repo /out
+      - name: Guard Trixie diagnostic artifact contents
+        if: always()
+        run: |
+          test ! -d ci-results/trixie/logs || \
+          ! find ci-results/trixie/logs -type f \( -name 'NVIDIA-Linux-*.run' -o -name '*.ko' -o -name '*.ko.*' -o -name '*.deb' -o -name '*.dsc' -o -name '*.changes' -o -name '*.buildinfo' -o -name '*.orig*.tar.*' -o -name '*.so' -o -name '*.so.*' \) -print | grep .
+      - name: Upload Trixie diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-logs-trixie
+          path: ci-results/trixie/logs/

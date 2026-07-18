@@ -125,6 +125,7 @@ deps_nvidia_kmod_binary	+= $${nvidia-kernel}-$${nvidia:Version} |
 deps_nvidia_kmod_source	 = $${nvidia-kernel}-dkms (>= $${nvidia:Version}) |
 deps_nvidia_kmod_source	+= $${nvidia-kernel}-source (>= $${nvidia:Version}) |
 
+kmod_tested_description = $(if $(strip $(or $(LINUX_KMOD_TESTED_$(DEB_HOST_ARCH)),$(LINUX_KMOD_TESTED))),Kernel module compatibility has been tested through Linux $(strip $(or $(LINUX_KMOD_TESTED_$(DEB_HOST_ARCH)),$(LINUX_KMOD_TESTED))).,Compatibility with current Debian kernels has not yet been validated.)
 
 .PHONY: autogen prepare patch
 autogen: debian/control $(AUTOGEN)
@@ -335,7 +336,7 @@ override_dh_gencontrol:
 		$(foreach a,$(ARCH_CANDIDATES),-V'arch:$a=$(filter $a,$(DRIVER_ARCH_LIST))') \
 		-V'nvidia:kmod:binary=$(deps_nvidia_kmod_binary)' \
 		-V'nvidia:kmod:source=$(deps_nvidia_kmod_source)' \
-		-V'nvidia:kmod:tested:Linux=$(strip $(or $(LINUX_KMOD_TESTED_$(DEB_HOST_ARCH)),$(LINUX_KMOD_TESTED),???))' \
+		-V'nvidia:kmod:tested:Description=$(kmod_tested_description)' \
 		-V'nvidia:kmod:blob:archlist=$(subst $(space),$(comma)$(space),$(BLOB_ARCH_LIST)) architecture$(if $(filter 1,$(words $(BLOB_ARCH_LIST))),,s)' \
 		-Vnvidia:kmod:Description="`cat debian/control.kmod`" \
 		-Vnvidia:Models="`cat debian/control.models`"
@@ -344,6 +345,7 @@ override_dh_gencontrol:
 debian/substvars:
 	echo 'nvidia:VariantDesc=$(variant_description)' > $@
 	echo 'nvidia:VariantDescShort=$(variant_description_short)' >> $@
+	echo 'nvidia:kmod:tested:Description=$(kmod_tested_description)' >> $@
 
 # Do not run dh_strip here.  The NVIDIA license says:
 #
@@ -423,6 +425,7 @@ debian/control-real: $(CONTROL_FILES)
 		-V'nvidia:Variant=$(-variant)' \
 		-V'libcuda1=$(libcuda1)' \
 		-V'Vcs-Git:Branch=$(if $(GIT_BRANCH), -b $(GIT_BRANCH))' \
+		-V'nvidia:kmod:tested:Description=$(kmod_tested_description)' \
 		$(foreach a,$(ARCH_CANDIDATES),-V'arch:$a=$(filter $a,$(DRIVER_ARCH_LIST))') \
 		-- \
 		debian/control.in > debian/control.new

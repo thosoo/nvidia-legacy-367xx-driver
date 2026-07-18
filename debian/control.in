@@ -60,7 +60,7 @@ Description: NVIDIA metapackage${nvidia:VariantDesc}
  See /usr/share/doc/${nvidia}-driver/README.txt.gz
  for a complete list of supported GPUs and PCI IDs.
  .
- Building the kernel module has been tested up to Linux ${nvidia:kmod:tested:Linux}.
+ ${nvidia:kmod:tested:Description}
 
 Package: ${nvidia}-alternative
 Architecture: amd64
@@ -151,7 +151,7 @@ Description: NVIDIA binary kernel module DKMS source${nvidia:VariantDesc}
  .
  This package contains the blobs for building kernel modules for the
  ${nvidia:kmod:blob:archlist}.
- Building the kernel modules has been tested up to Linux ${nvidia:kmod:tested:Linux}.
+ ${nvidia:kmod:tested:Description}
 
 Package: ${nvidia-kernel}-source
 Section: non-free/kernel
@@ -185,7 +185,7 @@ Description: NVIDIA binary kernel module source${nvidia:VariantDesc}
  .
  This package contains the blobs for building kernel modules for the
  ${nvidia:kmod:blob:archlist}.
- Building the kernel modules has been tested up to Linux ${nvidia:kmod:tested:Linux}.
+ ${nvidia:kmod:tested:Description}
 
 Package: xserver-xorg-video-${nvidia}
 Section: non-free/x11
