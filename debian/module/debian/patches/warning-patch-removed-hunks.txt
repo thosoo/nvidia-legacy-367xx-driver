@@ -1,0 +1,11 @@
+0049 396.18: entire Volta access-counter include hunk disabled.
+0049 418.30: entire mixed UVM warning/removal batch disabled pending safety audit.
+0049 430.09: entire nv-kthread-q.c static hunk disabled; file absent.
+0049 435.17: include-only UVM batch disabled pending evidence.
+0049 510.39.01: Pascal UVM static-conversion batch disabled pending cross-TU audit.
+0050: UVM fault access-type hunk disabled pending type-semantic proof.
+0051: nv-kthread-q-selftest.c, nv-ibmnpu.c, nvlink include, and brace-only hunks omitted.
+0052: UVM include batch disabled pending evidence.
+0053: nv-gpu-numa.c callback return-type hunk omitted; file absent.
+0054: UVM warning hunk disabled pending evidence.
+0057: UVM semantic patch disabled pending ownership/lifetime audit.

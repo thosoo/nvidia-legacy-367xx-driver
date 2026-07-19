@@ -1,0 +1,14 @@
+/build-results/
+/build/
+/tmp/
+*.deb
+*.dsc
+*.changes
+*.buildinfo
+*.orig*.tar.*
+NVIDIA-Linux-*.run
+NVIDIA-Linux-*/
+*.ko
+*.ko.*
+
+/ci-results/

@@ -1,24 +1,78 @@
 #!/bin/sh
 set -eu
+
+if [ "$#" -ne 2 ]; then
+    echo "usage: $0 IMPORT_DIRECTORY OUTPUT_DIRECTORY" >&2
+    exit 2
+fi
+
+source=nvidia-graphics-drivers-legacy-367xx
 version=367.134
 arch=x86_64
 base=NVIDIA-Linux-${arch}-${version}
 file=${base}.run
 url=https://us.download.nvidia.com/XFree86/Linux-x86_64/${version}/${file}
 sha256=c621c6068c1d09a88a4159963093fa1a28b45c7c989280c273c7d7a2b566c62f
-work=${1:-$(pwd)}
-mkdir -p "$work"
-cd "$work"
+import_dir=$(readlink -m "$1")
+output_dir=$(readlink -m "$2")
+main_orig=${source}_${version}.orig.tar.xz
+amd64_orig=${source}_${version}.orig-amd64.tar.xz
+final_main=${output_dir%/}/$main_orig
+final_amd64=${output_dir%/}/$amd64_orig
+topdir=${source}-${version}
+
+mkdir -p "$import_dir" "$output_dir"
+tmp_main=$(mktemp "${output_dir%/}/.${main_orig}.tmp.XXXXXX")
+tmp_amd64=$(mktemp "${output_dir%/}/.${amd64_orig}.tmp.XXXXXX")
+main_listing=$(mktemp)
+amd64_listing=$(mktemp)
+cleanup() {
+    rm -f "$tmp_main" "$tmp_amd64" "$main_listing" "$amd64_listing"
+}
+trap cleanup EXIT INT TERM
+
+cd "$import_dir"
+
 if [ ! -f "$file" ]; then
-  curl -L --fail --retry 3 -o "$file" "$url"
+    curl -L --fail --retry 3 -o "$file" "$url"
 fi
 printf '%s  %s\n' "$sha256" "$file" | sha256sum -c -
-rm -rf amd64 "$base"
+
+rm -rf amd64 "$base" "$topdir"
 sh "./$file" --extract-only
-mkdir -p amd64
-# Keep the component tarball in Debian's established layout: amd64/<runfile>.
-# The extracted tree remains in the work directory for audit/diff work but is not
-# placed in the Debian orig component.
+mkdir -p amd64 "$topdir"
 cp "$file" "amd64/$file"
-tar --sort=name --owner=0 --group=0 --numeric-owner -caf "../nvidia-graphics-drivers-legacy-367xx_${version}.orig-amd64.tar.xz" amd64
-printf 'created %s\n' "../nvidia-graphics-drivers-legacy-367xx_${version}.orig-amd64.tar.xz"
+
+tar --sort=name --owner=0 --group=0 --numeric-owner -cJf "$tmp_main" "$topdir"
+tar --sort=name --owner=0 --group=0 --numeric-owner -cJf "$tmp_amd64" amd64
+
+test -s "$tmp_main"
+test -s "$tmp_amd64"
+xz -t < "$tmp_main"
+xz -t < "$tmp_amd64"
+tar -tf "$tmp_main" > "$main_listing"
+tar -tf "$tmp_amd64" > "$amd64_listing"
+if ! grep -Fx "$topdir/" "$main_listing" >/dev/null || [ "$(wc -l < "$main_listing")" -ne 1 ]; then
+    rm -f "$final_main" "$final_amd64"
+    echo "failed to verify primary orig layout" >&2
+    cat "$main_listing" >&2
+    exit 1
+fi
+if grep -E 'NVIDIA-Linux-.*\.run|\.ko(\..*)?$|\.so(\..*)?$' "$main_listing" >/dev/null; then
+    rm -f "$final_main" "$final_amd64"
+    echo "primary orig unexpectedly contains proprietary payload" >&2
+    cat "$main_listing" >&2
+    exit 1
+fi
+if ! grep -Fx "amd64/$file" "$amd64_listing" >/dev/null; then
+    rm -f "$final_main" "$final_amd64"
+    echo "failed to verify amd64 orig layout" >&2
+    cat "$amd64_listing" >&2
+    exit 1
+fi
+mv "$tmp_main" "$final_main"
+mv "$tmp_amd64" "$final_amd64"
+trap - EXIT INT TERM
+rm -f "$main_listing" "$amd64_listing"
+printf 'created %s\n' "$final_main"
+printf 'created %s\n' "$final_amd64"

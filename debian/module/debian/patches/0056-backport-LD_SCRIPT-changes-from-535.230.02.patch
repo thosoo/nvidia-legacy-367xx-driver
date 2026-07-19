@@ -1,37 +1,42 @@
-From 50fbab40970e8d962483b3029b2b3582b908ebfc Mon Sep 17 00:00:00 2001
-From: Andreas Beckmann <anbe@debian.org>
-Date: Fri, 24 Jan 2025 12:37:14 +0100
-Subject: [PATCH] backport LD_SCRIPT changes from 535.230.02
+From: Debian NVIDIA Maintainers
+Subject: backport LD_SCRIPT lookup changes for 367.134
+Origin: Debian NVIDIA packaging 535.230.02 compatibility patch
+Forwarded: not-needed
 
+Rebased for the NVIDIA 367.134 Makefile. Modern x86 kernels may install the
+module linker script below arch/x86 rather than arch/x86_64, so derive the
+kernel linker-script architecture separately from the Kbuild ARCH value.
 ---
  Makefile | 11 +++++++++--
  1 file changed, 9 insertions(+), 2 deletions(-)
 
 diff --git a/Makefile b/Makefile
-index 8ba80130..4d576169 100644
 --- a/Makefile
 +++ b/Makefile
-@@ -60,2 +60,8 @@ else
+@@ -59,6 +59,12 @@ else
+     )
    endif
-+
+ 
 +  KERNEL_ARCH = $(ARCH)
 +
 +  ifneq ($(filter $(ARCH),i386 x86_64),)
 +    KERNEL_ARCH = x86
 +  endif
++
+   NV_KERNEL_MODULES ?= $(wildcard nvidia nvidia-uvm nvidia-modeset nvidia-drm)
+   NV_KERNEL_MODULES := $(filter-out $(NV_EXCLUDE_KERNEL_MODULES), \
+                                     $(NV_KERNEL_MODULES))
+@@ -98,8 +104,11 @@ else
+   # processing on the module symbols on which the Linux kernel's module
+   # resolution is dependent and hence must be used whenever present.
  
-@@ -98,8 +104,9 @@ else
-   # module symbols on which the Linux kernel's module resolution is dependent
-   # and hence must be used whenever present.
- 
--  LD_SCRIPT ?= $(KERNEL_SOURCES)/scripts/module-common.lds      \
--               $(KERNEL_SOURCES)/arch/$(ARCH)/kernel/module.lds \
+-  LD_SCRIPT ?= $(KERNEL_SOURCES)/scripts/module-common.lds
+-  NV_MODULE_COMMON_SCRIPT := $(if $(wildcard $(LD_SCRIPT)),-T $(LD_SCRIPT))
 +  LD_SCRIPT ?= $(KERNEL_SOURCES)/scripts/module-common.lds             \
 +               $(KERNEL_SOURCES)/arch/$(KERNEL_ARCH)/kernel/module.lds \
 +               $(KERNEL_OUTPUT)/arch/$(KERNEL_ARCH)/module.lds         \
-                $(KERNEL_OUTPUT)/scripts/module.lds
-   NV_MODULE_COMMON_SCRIPTS := $(foreach s, $(wildcard $(LD_SCRIPT)), -T $(s))
++               $(KERNEL_OUTPUT)/scripts/module.lds
++  NV_MODULE_COMMON_SCRIPT := $(foreach s, $(wildcard $(LD_SCRIPT)), -T $(s))
  
--- 
-2.39.5
-
+   # Use $* to match the stem % in the kernel interface file %-linux.o. Replace
+   # "nv" with "nvidia" in $* as appropriate: e.g. nv-modeset-linux.o links

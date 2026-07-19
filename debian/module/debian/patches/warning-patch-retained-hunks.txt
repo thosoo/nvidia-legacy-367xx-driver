@@ -1,0 +1,5 @@
+0049 415.13: retained active; applies strictly.
+0051: retained nvidia-modeset local static conversions and nvidia/nv-dma.c local static conversion.
+0053: retained nvidia-modeset close static conversion, ACPI local-variable guard, frontend prototype relocation, nv-instance include, and fallthrough annotation.
+0055: retained file_operations.fop_flags compatibility probe and DRM fops consumer.
+0056: retained module linker-script lookup update.
