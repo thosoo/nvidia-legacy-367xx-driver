@@ -193,6 +193,37 @@ if [ "$binary_status" -ne 0 ]; then
 fi
 
 find /work/binary-source -type f -name '*.rej' -print > /work/logs/quilt-reject-files.txt || true
+if test -d /work/binary-source/build/kernel; then
+    sh /work/binary-source/tools/audit-module-series.sh \
+        /work/binary-source/build/kernel \
+        /work/logs/module-patch-audit || true
+fi
+{
+    if test -d /work/binary-source/kernel-source-tree; then
+        cd /work/binary-source/kernel-source-tree
+        QUILT_PATCHES=../debian/module/debian/patches quilt applied 2>&1 || true
+    else
+        echo "kernel-source-tree not created"
+    fi
+} > /work/logs/module-quilt-applied.txt
+{
+    if test -d /work/binary-source/kernel-source-tree; then
+        cd /work/binary-source/kernel-source-tree
+        QUILT_PATCHES=../debian/module/debian/patches quilt unapplied 2>&1 || true
+    else
+        echo "kernel-source-tree not created"
+    fi
+} > /work/logs/module-quilt-unapplied.txt
+cat /work/logs/module-quilt-applied.txt /work/logs/module-quilt-unapplied.txt > /work/logs/module-quilt-state.txt
+find /work/binary-source/kernel-source-tree -type f -name '*.rej' -print > /work/logs/module-quilt-reject-files.txt 2>/dev/null || true
+: > /work/logs/module-quilt-reject-contents.txt
+while IFS= read -r reject; do
+    test -n "$reject" || continue
+    {
+        printf '\n===== %s =====\n' "$reject"
+        cat "$reject"
+    } >> /work/logs/module-quilt-reject-contents.txt
+done < /work/logs/module-quilt-reject-files.txt
 if test -f /work/binary-source/copyright.tmp && test -f /work/binary-source/LICENSE.tmp; then
     diff -w /work/binary-source/copyright.tmp /work/binary-source/LICENSE.tmp \
         > /work/logs/license-comparison-excerpt.txt || true
