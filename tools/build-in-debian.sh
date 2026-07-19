@@ -128,6 +128,7 @@ tests/no-390xx-leaks.sh
 tests/amd64-only.sh
 tests/no-proprietary-artifacts.sh
 tests/generated-control-drift.sh
+tests/license-367xx.sh
 tests/supported-pci-ids.sh
 
 set_stage source-build
@@ -172,6 +173,7 @@ cat /work/logs/extracted-script-modes.txt
 sh tests/no-390xx-leaks.sh
 sh tests/amd64-only.sh
 sh tests/generated-control-drift.sh
+sh tests/license-367xx.sh
 sh tests/supported-pci-ids.sh
 if test -e glvnd/nvidia_icd.json || test -e nonglvnd/nvidia_icd.json; then
     test -e glvnd/nvidia_icd.json
@@ -191,6 +193,10 @@ if [ "$binary_status" -ne 0 ]; then
 fi
 
 find /work/binary-source -type f -name '*.rej' -print > /work/logs/quilt-reject-files.txt || true
+if test -f /work/binary-source/copyright.tmp && test -f /work/binary-source/LICENSE.tmp; then
+    diff -w /work/binary-source/copyright.tmp /work/binary-source/LICENSE.tmp \
+        > /work/logs/license-comparison-excerpt.txt || true
+fi
 {
     QUILT_PATCHES=debian/patches QUILT_SERIES=series-postunpack quilt applied 2>&1 || true
     echo '--- unapplied ---'
