@@ -29,25 +29,25 @@ do-div-cast.patch
 0046-backport-nv_get_kern_phys_address-changes-from-555.4.patch
 0047-backport-drm_output_poll_changed-changes-from-535.21.patch
 0048-backport-cmd_symlink-changes-from-550.142.patch
-#HAS_UVM#0049-backport-uvm-warning-fixes-from-396.18.patch
+# NVIDIA 367.134 predates Volta access counters and lacks nvidia-uvm/uvm8_volta_access_counter_buffer.c; include-only later-driver patch inactive: 0049-backport-uvm-warning-fixes-from-396.18.patch
 #HAS_UVM#0049-backport-uvm-warning-fixes-from-415.13.patch
-#HAS_UVM#0049-backport-uvm-warning-fixes-from-418.30.patch
-0049-backport-warning-fixes-from-430.09.patch
-#HAS_UVM#0049-backport-uvm-warning-fixes-from-435.17.patch
-#HAS_UVM#0049-backport-uvm-warning-fixes-from-510.39.01.patch
-#HAS_UVM#0050-backport-uvm-warning-fixes-from-535.146.02.patch
+# warning-only UVM static/removal batch needs symbol-by-symbol audit before activation; includes later Volta hunks absent from 367.134: 0049-backport-uvm-warning-fixes-from-418.30.patch
+# NVIDIA 367.134 has no nvidia/nv-kthread-q.c; _raw_q_flush static warning fix is later-driver-only: 0049-backport-warning-fixes-from-430.09.patch
+# include-only UVM warning batch deferred; headers exist but no compiler evidence yet requires these includes: 0049-backport-uvm-warning-fixes-from-435.17.patch
+# warning-only Pascal static conversion deferred pending cross-TU symbol audit: 0049-backport-uvm-warning-fixes-from-510.39.01.patch
+# type-semantic UVM fault access patch deferred until compiler evidence or source comparison proves uvm_fault_access_type_t is required: 0050-backport-uvm-warning-fixes-from-535.146.02.patch
 0051-backport-warning-fixes-from-535.216.01.patch
-#HAS_UVM#0052-backport-uvm-warning-fixes-from-560.28.03.patch
+# include-only UVM warning batch deferred pending symbol/header audit: 0052-backport-uvm-warning-fixes-from-560.28.03.patch
 0053-fix-more-warnings.patch
-#HAS_UVM#0054-fix-more-uvm-warnings.patch
+# UVM warning-only hunk deferred until compiler reports the warning or symbol audit proves it safe: 0054-fix-more-uvm-warnings.patch
 0055-backport-file_operations_fop_unsigned_offset_present.patch
 0056-backport-LD_SCRIPT-changes-from-535.230.02.patch
-#HAS_UVM#0057-backport-uvm-fixes-from-535.230.02.patch
+# UVM semantic safety patch deferred pending ownership/lifetime audit against authoritative later source: 0057-backport-uvm-fixes-from-535.230.02.patch
 0060-backport-build_cflags-changes-from-525.85.05.patch
-0061-backport-drm_gem_object_vmap_has_map_arg-changes-fro.patch
-0063-backport-conftest.sh-comment-changes-from-515.48.07.patch
-0063-backport-conftest.sh-comment-changes-from-525.53.patch
-0063-backport-conftest.sh-comment-changes-from-545.23.06.patch
+# 367.134 has no drm_gem_object_funcs vmap callback consumer; dma_buf_map/iosys_map probe is later-driver-only: 0061-backport-drm_gem_object_vmap_has_map_arg-changes-fro.patch
+# comment-only conftest documentation refresh is later-maintenance noise for 367.134 and is inactive: 0063-backport-conftest.sh-comment-changes-from-515.48.07.patch
+# comment-only conftest documentation refresh is later-maintenance noise for 367.134 and is inactive: 0063-backport-conftest.sh-comment-changes-from-525.53.patch
+# comment-only conftest documentation refresh is later-maintenance noise for 367.134 and is inactive: 0063-backport-conftest.sh-comment-changes-from-545.23.06.patch
 0064-backport-drm_driver_has_date-from-570.124.04.patch
 0065-backport-ccflags-y-changes-from-570.153.02.patch
 0066-backport-nv_timer_delete_sync-changes-from-570.153.0.patch

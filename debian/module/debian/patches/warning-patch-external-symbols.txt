@@ -1,0 +1,2 @@
+Deferred for compiler/source-backed audit: uvm_pushbuffer_get_size, uvm_pushbuffer_update_progress, UVM fault access-type symbols, and UVM semantic helper changes from 0057.
+Retained static conversions searched in the 367.134 tree: nvkms_open_common, nvkms_ioctl_common, nv_load_dma_map_scatterlist.
