@@ -18,6 +18,7 @@ tree=pathlib.Path(sys.argv[1]); patchdir=pathlib.Path(sys.argv[2]); series=pathl
 patches=[l.strip() for l in series.read_text().splitlines() if l.strip()]
 headers=['order','patch filename','origin/version','files touched','strict cumulative result','independent strict result','default fuzz/offset result','forced discovery result','reject count','missing target files','missing target symbols','consumed conftest macros','introduced conftest macros','probable prerequisites','classification','recommended action','contamination status']
 rows=[]; touched=[]; rejects=[]; fuzz=[]; missing_files=[]; missing_symbols=[]; producers=[]; consumers=[]; contamination=[]
+reject_root=report/'module-patch-rejects'; reject_root.mkdir(exist_ok=True)
 
 def run(cmd,cwd): return subprocess.run(cmd,cwd=cwd,text=True,stdout=subprocess.PIPE,stderr=subprocess.STDOUT)
 def text(p): return (patchdir/p).read_text(errors='replace')
@@ -64,10 +65,16 @@ for idx,p in enumerate(patches,1):
     independent='clean' if ir.returncode==0 else 'fail'
     default='clean' if dr.returncode==0 and 'fuzz' not in dr.stdout and 'offset' not in dr.stdout else ('fuzz-or-offset' if dr.returncode==0 else 'fail')
     if 'fuzz' in dr.stdout or 'offset' in dr.stdout: fuzz.append(f'independent\t{p}\n{dr.stdout}')
-    fr=run(['patch','-p1','--forward','--reject-file=-','-i',str(pf)],forcedtree)
+    fr=run(['patch','-p1','--forward','-i',str(pf)],forcedtree)
     forced_result='applied' if fr.returncode==0 else 'rejected'
     if fr.returncode!=0:
         contaminated=True; rejects.append(f'forced\t{p}\n{fr.stdout}')
+        safe=re.sub(r'[^A-Za-z0-9_.-]+','_',p)
+        pdir=reject_root/safe; pdir.mkdir(parents=True, exist_ok=True)
+        (pdir/'application.log').write_text(fr.stdout)
+        for rej in forcedtree.rglob('*.rej'):
+            rel=str(rej.relative_to(forcedtree)).replace('/','__')
+            shutil.copy2(rej, pdir/rel)
     if contaminated: contamination.append(f'{p}\tpotentially-contaminated')
     reject_count=fr.stdout.count('FAILED') + fr.stdout.count('.rej')
     if p.startswith(('include-swiotlb','ignore_xen','arm-','nvidia-drm-arm','armhf-')):
@@ -102,4 +109,87 @@ with (report/'module-patch-audit.md').open('w') as f:
 (report/'module-patch-conftest-consumers.txt').write_text('\n'.join(consumers)+'\n')
 (report/'module-patch-contamination.txt').write_text('\n'.join(contamination)+'\n')
 shutil.rmtree(cum, ignore_errors=True); shutil.rmtree(forced, ignore_errors=True)
+PY
+
+# Emit a lightweight per-hunk applicability report. The patch-oriented summary
+# must not classify a whole patch as absent merely because one target file is
+# missing from NVIDIA 367.134.
+python3 - "$tree" "$patchdir" "$series" "$report" <<'PY'
+import csv, pathlib, re, shutil, subprocess, sys, tempfile
+
+tree=pathlib.Path(sys.argv[1]); patchdir=pathlib.Path(sys.argv[2]); series=pathlib.Path(sys.argv[3]); report=pathlib.Path(sys.argv[4])
+patches=[l.strip() for l in series.read_text().splitlines() if l.strip()]
+headers=['patch','file','hunk number','target file exists','strict application result','default application result','fuzz','offset','symbol/context targeted','probable semantic purpose','classification','recommended action']
+rows=[]
+
+def run(cmd,cwd):
+    return subprocess.run(cmd,cwd=cwd,text=True,stdout=subprocess.PIPE,stderr=subprocess.STDOUT)
+
+def split_hunks(text):
+    current_file=None; file_header=[]; hunk=[]; hno=0
+    for line in text.splitlines(True):
+        if line.startswith('diff --git '):
+            if hunk and current_file:
+                yield current_file,hno,file_header,hunk
+            current_file=None; file_header=[]; hunk=[]; hno=0
+        elif line.startswith('--- a/'):
+            if hunk and current_file:
+                yield current_file,hno,file_header,hunk
+                hunk=[]
+            file_header=[line]
+        elif line.startswith('+++ b/') and file_header:
+            file_header.append(line)
+            current_file=line[6:].strip().split('\t',1)[0].split(' ',1)[0]
+        elif line.startswith('@@ '):
+            if hunk and current_file:
+                yield current_file,hno,file_header,hunk
+            hno += 1; hunk=[line]
+        elif hunk:
+            hunk.append(line)
+    if hunk and current_file:
+        yield current_file,hno,file_header,hunk
+
+def purpose(patch, ctx):
+    name=patch.lower()
+    if 'conftest' in name or 'conftest' in ctx: return 'kernel feature-probe compatibility'
+    if 'drm' in name or 'drm' in ctx: return 'DRM API compatibility'
+    if 'get_user_pages' in name: return 'get_user_pages API compatibility'
+    if 'vma' in name or 'vm_' in name: return 'vm_area_struct API compatibility'
+    return 'mechanical kernel compatibility backport'
+
+for p in patches:
+    pt=(patchdir/p).read_text(errors='replace')
+    for f,hno,fh,hunk in split_hunks(pt):
+        exists=(tree/f).exists()
+        patch_text=''.join(fh+hunk)
+        tmp=tempfile.mkdtemp(prefix='module-hunk.')
+        tmpdir=pathlib.Path(tmp); hpatch=tmpdir/'h.patch'; hpatch.write_text(patch_text)
+        work=tmpdir/'tree'; shutil.copytree(tree,work,symlinks=True)
+        strict=run(['patch','-p1','--fuzz=0','--dry-run','-i',str(hpatch)],work) if exists else None
+        default=run(['patch','-p1','--dry-run','-i',str(hpatch)],work) if exists else None
+        dout=default.stdout if default else 'target file absent'
+        fuzz='yes' if 'fuzz' in dout else 'no'
+        mo=re.search(r'offset ([+-]?[0-9]+)', dout)
+        offset=mo.group(1) if mo else ('yes' if 'offset' in dout else 'no')
+        ctx=hunk[0].strip().split('@@',2)[-1].strip()
+        if not exists:
+            cls='file-absent'; action='drop this hunk only if no 367.134 equivalent exists'
+        elif strict and strict.returncode==0 and 'offset' not in (strict.stdout or ''):
+            cls='clean'; action='none'
+        elif strict and strict.returncode==0:
+            cls='refresh-offset'; action='refresh context/line numbers'
+        elif default and default.returncode==0 and fuzz=='no':
+            cls='refresh-offset'; action='refresh context/line numbers'
+        elif default and default.returncode==0:
+            cls='refresh-fuzz'; action='refresh context to remove fuzz'
+        else:
+            cls='rebase-context'; action='inspect target symbol and rebase or classify as absent'
+        rows.append([p,f,hno,'yes' if exists else 'no','clean' if strict and strict.returncode==0 else 'fail','clean' if default and default.returncode==0 else 'fail',fuzz,offset,ctx or 'none',purpose(p,ctx),cls,action])
+        shutil.rmtree(tmp,ignore_errors=True)
+with (report/'module-patch-hunks.tsv').open('w',newline='') as fp:
+    csv.writer(fp,delimiter='\t').writerows([headers,*rows])
+with (report/'module-patch-hunks.md').open('w') as fp:
+    fp.write('| patch | file | hunk | strict | default | fuzz | offset | classification | action |\n|---|---|---:|---|---|---|---|---|---|\n')
+    for r in rows:
+        fp.write(f'| {r[0]} | {r[1]} | {r[2]} | {r[4]} | {r[5]} | {r[6]} | {r[7]} | {r[10]} | {r[11]} |\n')
 PY
