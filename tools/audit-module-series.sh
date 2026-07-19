@@ -114,15 +114,22 @@ for p in patches:
         continue
     r=run(['patch','-p1','-i',str(patchdir/p)],prodtree)
     out=r.stdout or ''
-    if r.returncode != 0:
-        first_prod_reject = first_prod_reject or p
-        prod_rows.append(f'{p}\treject')
-        prod_blocked=True
-        continue
     if 'fuzz' in out and not first_fuzzed:
         first_fuzzed=p
     if 'offset' in out and not first_offset:
         first_offset=p
+    if r.returncode != 0:
+        first_prod_reject = first_prod_reject or p
+        status='reject'
+        if 'fuzz' in out and 'offset' in out:
+            status='reject-fuzz-and-offset'
+        elif 'fuzz' in out:
+            status='reject-fuzz'
+        elif 'offset' in out:
+            status='reject-offset'
+        prod_rows.append(f'{p}\t{status}')
+        prod_blocked=True
+        continue
     status='clean'
     if 'fuzz' in out and 'offset' in out:
         status='fuzz-and-offset'
