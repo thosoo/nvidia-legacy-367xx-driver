@@ -158,6 +158,7 @@ cat /work/logs/extracted-script-modes.txt
 sh tests/no-390xx-leaks.sh
 sh tests/amd64-only.sh
 sh tests/generated-control-drift.sh
+sh tests/vulkan-icd-json.sh . || test ! -e glvnd/nvidia_icd.json
 
 set_stage binary-build
 set +e
@@ -166,6 +167,9 @@ binary_status=$?
 set -e
 cat /work/logs/binary-build.log
 printf '%s\n' "$binary_status" > /work/logs/binary-build.exit
+if [ "$binary_status" -ne 0 ]; then
+    printf '%s\n' "$current_stage" > /work/logs/failed-stage.txt
+fi
 
 find /work/binary-source -type f -name '*.rej' -print > /work/logs/quilt-reject-files.txt || true
 {
@@ -183,12 +187,30 @@ while IFS= read -r reject; do
 done < /work/logs/quilt-reject-files.txt
 
 grep -n -E 'kernel-source-tree|CC \[M\]|CONFTEST|nvidia-uvm|nvidia-drm|nvidia-modeset|nv-linux' /work/logs/binary-build.log > /work/logs/kernel-build-progress.txt || true
-if test -s /work/logs/kernel-build-progress.txt; then
+if test -d /work/binary-source/kernel-source-tree; then
+    echo yes > /work/logs/kernel-source-tree-created.txt
+else
+    echo no > /work/logs/kernel-source-tree-created.txt
+fi
+if test -d /work/binary-source/kernel-source-tree &&
+   grep -Eq '(^|[[:space:]])(CC|LD)[[:space:]]+\[M\]|MODPOST|make .* -C /lib/modules/.*/build' /work/logs/binary-build.log
+then
     echo yes > /work/logs/kernel-compilation-reached.txt
 else
     echo no > /work/logs/kernel-compilation-reached.txt
 fi
 grep -n -C 8 -E 'error:|fatal error:|implicit declaration|incompatible pointer|No such file|treated as errors' /work/logs/binary-build.log > /work/logs/kernel-build-excerpt.txt || true
+if test -e glvnd/nvidia_icd.json && test -e nonglvnd/nvidia_icd.json; then
+    set +e
+    sh tests/vulkan-icd-json.sh . > /work/logs/vulkan-icd-json.log 2>&1
+    vulkan_icd_status=$?
+    set -e
+    cat /work/logs/vulkan-icd-json.log
+    printf '%s\n' "$vulkan_icd_status" > /work/logs/vulkan-icd-json.exit
+    if [ "$binary_status" -eq 0 ]; then
+        test "$vulkan_icd_status" -eq 0
+    fi
+fi
 
 set_stage collect-results
 find /work -maxdepth 1 -type f \( -name '*.deb' -o -name '*.dsc' -o -name '*.changes' -o -name '*.buildinfo' \) -printf '%f\n' | sort > /work/logs/binary-package-list.txt

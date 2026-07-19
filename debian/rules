@@ -154,14 +154,16 @@ endif
 	ls -al
 	touch $@
 
-nvidia_icd.json.template	 = NVIDIA-Linux/nvidia_icd.json.template
-$(nvidia_icd.json.template): unpack-stamp
-glvnd/nvidia_icd.json: $(nvidia_icd.json.template)
+upstream_nvidia_icd_template	 = NVIDIA-Linux/nvidia_icd.json.template
+packaging_nvidia_icd_template	 = debian/nvidia_icd.json.template
+nvidia_icd_template = $$(if test -f "$(upstream_nvidia_icd_template)"; then printf '%s\n' "$(upstream_nvidia_icd_template)"; else printf '%s\n' "$(packaging_nvidia_icd_template)"; fi)
+$(packaging_nvidia_icd_template):
+glvnd/nvidia_icd.json: unpack-stamp $(packaging_nvidia_icd_template)
 	mkdir -p $(@D)
-	sed 's/__NV_VK_ICD__/libGLX_nvidia.so.0/' $< > $@
-nonglvnd/nvidia_icd.json: $(nvidia_icd.json.template)
+	sed 's/__NV_VK_ICD__/libGLX_nvidia.so.0/' "$(nvidia_icd_template)" > $@
+nonglvnd/nvidia_icd.json: unpack-stamp $(packaging_nvidia_icd_template)
 	mkdir -p $(@D)
-	sed 's/__NV_VK_ICD__/libGL.so.1/' $< > $@
+	sed 's/__NV_VK_ICD__/libGL.so.1/' "$(nvidia_icd_template)" > $@
 
 debian/nv-readme.ids: debian/nv-readme.ids.common debian/nv-readme.ids.$(DEB_HOST_ARCH)
 	cat $^ | sort -u > $@

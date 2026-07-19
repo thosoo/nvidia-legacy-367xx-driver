@@ -18,3 +18,15 @@ Known differences from the 390.157 baseline to preserve during that audit:
   hunk is corrected against NVIDIA 390.157 semantics.
 * Newer 390-series-only userspace components must be removed from generated
   manifests unless the exact file is present in the 367.134 inventory.
+
+Vulkan ICD metadata
+-------------------
+
+NVIDIA 367.134 ships `nvidia_icd.json` but not the later
+`nvidia_icd.json.template` used by Debian's 390xx-derived packaging rules.
+The shipped 367.134 JSON uses Vulkan ICD file format `1.0.0`, API version
+`1.0.8`, the `ICD` object, and the `VK_LAYER_NV_optimus` layer object with
+`libGLX_nvidia.so.0` as the library path.  `debian/nvidia_icd.json.template`
+is a packaging-owned copy of that 367.134 structure with the library path
+replaced by `__NV_VK_ICD__` so the existing GLVND and non-GLVND substitutions
+can continue to generate the two Debian package variants.
