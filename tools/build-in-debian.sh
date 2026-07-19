@@ -215,7 +215,15 @@ fi
     fi
 } > /work/logs/module-quilt-unapplied.txt
 cat /work/logs/module-quilt-applied.txt /work/logs/module-quilt-unapplied.txt > /work/logs/module-quilt-state.txt
-find /work/binary-source/kernel-source-tree -type f -name '*.rej' -print > /work/logs/module-quilt-reject-files.txt 2>/dev/null || true
+{
+    for reject_root in         /work/binary-source/kernel-source-tree         /work/binary-source/build/kernel
+    do
+        if test -d "$reject_root"; then
+            find "$reject_root" -type f -name '*.rej' -print
+        fi
+    done
+} > /work/logs/module-quilt-reject-files.txt 2>/dev/null || true
+sed "s#^/work/binary-source/##" /work/logs/module-quilt-reject-files.txt     > /work/logs/module-quilt-reject-files-relative.txt || true
 : > /work/logs/module-quilt-reject-contents.txt
 while IFS= read -r reject; do
     test -n "$reject" || continue
