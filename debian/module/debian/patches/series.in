@@ -71,9 +71,9 @@ use-kbuild-flags.patch
 nvidia-use-ARCH.o_binary.patch
 nvidia-modeset-use-ARCH.o_binary.patch
 
-# armhf support
-include-swiotlb-header-on-arm.patch
-ignore_xen_on_arm.patch
-arm-outer-sync.patch
-nvidia-drm-arm-cflags.patch
-armhf-on-arm64-kernel.patch
+# armhf support is intentionally inactive in this amd64-only 367xx fork.
+# include-swiotlb-header-on-arm.patch
+# ignore_xen_on_arm.patch
+# arm-outer-sync.patch
+# nvidia-drm-arm-cflags.patch
+# armhf-on-arm64-kernel.patch
