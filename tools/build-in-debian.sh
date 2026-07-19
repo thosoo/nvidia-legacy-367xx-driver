@@ -34,6 +34,7 @@ finalize()
     mkdir -p "$out/logs" "$out/artifacts"
     printf '%s\n' "$status" > /work/logs/overall.exit
     printf '%s\n' "${current_stage:-unknown}" > /work/logs/last-stage.txt
+    chmod -R a+rX /work/logs /work/artifacts
     if [ -d /work/logs ]; then
         cp -a /work/logs/. "$out/logs/"
     fi
@@ -109,9 +110,18 @@ grep -Fx "amd64/$runfile" /work/logs/amd64-orig-contents.txt
 sha256sum "/work/$main_orig" > /work/logs/main-orig.sha256
 sha256sum "/work/$amd64_orig" > /work/logs/amd64-orig.sha256
 find "/work/import/NVIDIA-Linux-x86_64-$version" -type f -printf '%P\n' | sort > /work/logs/inventory-367.134.txt
+
+set_stage verify-supported-pci-ids
+set +e
 sh /work/packaging/tests/supported-pci-ids.sh \
     "/work/import/NVIDIA-Linux-x86_64-$version" \
-    /work/logs/inventory-supported-pci-ids-367.134.txt
+    /work/logs/inventory-supported-pci-ids-367.134.txt \
+    > /work/logs/supported-pci-ids.log 2>&1
+pci_status=$?
+set -e
+cat /work/logs/supported-pci-ids.log
+printf '%s\n' "$pci_status" > /work/logs/supported-pci-ids.exit
+test "$pci_status" -eq 0
 
 cd /work/packaging
 tests/no-390xx-leaks.sh

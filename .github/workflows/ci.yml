@@ -30,6 +30,15 @@ jobs:
       - name: Guard Bookworm diagnostic artifact contents
         if: always()
         run: tests/no-uploaded-proprietary-artifacts.sh ci-results/bookworm/logs
+      - name: Check Bookworm exported diagnostics are readable
+        if: always()
+        run: |
+          unreadable=$(find ci-results/bookworm/logs ci-results/bookworm/artifacts -type f ! -readable -print)
+          if test -n "$unreadable"; then
+            echo "Unreadable exported CI files:" >&2
+            printf '%s\n' "$unreadable" >&2
+            exit 1
+          fi
       - name: Upload Bookworm diagnostics
         if: always()
         uses: actions/upload-artifact@v4
@@ -53,6 +62,15 @@ jobs:
       - name: Guard Trixie diagnostic artifact contents
         if: always()
         run: tests/no-uploaded-proprietary-artifacts.sh ci-results/trixie/logs
+      - name: Check Trixie exported diagnostics are readable
+        if: always()
+        run: |
+          unreadable=$(find ci-results/trixie/logs ci-results/trixie/artifacts -type f ! -readable -print)
+          if test -n "$unreadable"; then
+            echo "Unreadable exported CI files:" >&2
+            printf '%s\n' "$unreadable" >&2
+            exit 1
+          fi
       - name: Upload Trixie diagnostics
         if: always()
         uses: actions/upload-artifact@v4
