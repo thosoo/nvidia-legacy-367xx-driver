@@ -1,22 +1,20 @@
 Author: Andreas Beckmann <anbe@debian.org>
 Description: Select the correct nv-kernel.o blob for the target architecture
- The Debian nvidia-kernel-source package supports building for both i386 and
- amd64 kernels (on i386) from one source by including both binary objects.
- This patch makes the build system select the correct one depending on the
- kernel architecture the module is built for.
+ The 367xx fork is amd64-only at the Debian package level, but the upstream
+ build system still selects the binary object through kernel Kbuild symbols.
+ Keep the x86 selectors that match the shipped amd64/i386 object names and do
+ not invent non-shipped architecture blobs.
 
 --- a/nvidia/nvidia.Kbuild
 +++ b/nvidia/nvidia.Kbuild
-@@ -37,7 +37,11 @@ NVIDIA_KO = nvidia/nvidia.ko
+@@ -37,7 +37,9 @@ NVIDIA_KO = nvidia/nvidia.ko
  # and needs to be re-executed.
  #
  
 -NVIDIA_BINARY_OBJECT := $(src)/nvidia/nv-kernel.o_binary
 +NVIDIA_BINARY_OBJECT-$(CONFIG_X86_32)	+= nv-kernel-i386.o_binary
 +NVIDIA_BINARY_OBJECT-$(CONFIG_X86_64)	+= nv-kernel-amd64.o_binary
-+NVIDIA_BINARY_OBJECT-$(CONFIG_ARM)	+= nv-kernel-armhf.o_binary
-+NVIDIA_BINARY_OBJECT-$(CONFIG_PPC64)	+= nv-kernel-ppc64el.o_binary
 +NVIDIA_BINARY_OBJECT := $(src)/nvidia/$(NVIDIA_BINARY_OBJECT-y)
  NVIDIA_BINARY_OBJECT_O := nvidia/nv-kernel.o
  
- targets += $(NVIDIA_BINARY_OBJECT_O)
+ quiet_cmd_symlink = SYMLINK $@

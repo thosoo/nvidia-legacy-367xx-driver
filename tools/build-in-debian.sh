@@ -193,6 +193,10 @@ if [ "$binary_status" -ne 0 ]; then
 fi
 
 find /work/binary-source -type f -name '*.rej' -print > /work/logs/quilt-reject-files.txt || true
+# Capture production module quilt rejects before running audit replay.
+sh /work/binary-source/tools/collect-module-rejects.sh \
+    /work/binary-source \
+    /work/logs || true
 if test -d /work/binary-source/build/kernel; then
     sh /work/binary-source/tools/audit-module-series.sh \
         /work/binary-source/build/kernel \
@@ -217,23 +221,11 @@ fi
 cat /work/logs/module-quilt-applied.txt /work/logs/module-quilt-unapplied.txt > /work/logs/module-quilt-state.txt
 awk 'NF { print; exit }' /work/logs/module-quilt-unapplied.txt \
     > /work/logs/module-quilt-failed-patch.txt || true
-{
-    for reject_root in         /work/binary-source/kernel-source-tree         /work/binary-source/kernel-source-tree/.pc
-    do
-        if test -d "$reject_root"; then
-            find "$reject_root" -type f -name '*.rej' -print
-        fi
-    done
-} > /work/logs/module-quilt-reject-files.txt 2>/dev/null || true
-sed "s#^/work/binary-source/##" /work/logs/module-quilt-reject-files.txt     > /work/logs/module-quilt-reject-files-relative.txt || true
-: > /work/logs/module-quilt-reject-contents.txt
-while IFS= read -r reject; do
-    test -n "$reject" || continue
-    {
-        printf '\n===== %s =====\n' "$reject"
-        cat "$reject"
-    } >> /work/logs/module-quilt-reject-contents.txt
-done < /work/logs/module-quilt-reject-files.txt
+# Refresh the reject snapshot after recording quilt state, without depending on
+audit-generated reject files.
+sh /work/binary-source/tools/collect-module-rejects.sh \
+    /work/binary-source \
+    /work/logs || true
 if test -f /work/binary-source/copyright.tmp && test -f /work/binary-source/LICENSE.tmp; then
     diff -w /work/binary-source/copyright.tmp /work/binary-source/LICENSE.tmp \
         > /work/logs/license-comparison-excerpt.txt || true

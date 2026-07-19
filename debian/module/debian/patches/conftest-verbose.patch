@@ -3,9 +3,9 @@ Description: dump the generated conftest headers
 
 --- a/Kbuild
 +++ b/Kbuild
-@@ -122,6 +122,17 @@ NV_CONFTEST_HEADERS += $(obj)/conftest/h
+@@ -107,6 +107,17 @@ NV_CONFTEST_HEADERS := $(obj)/conftest/patches.h
+ NV_CONFTEST_HEADERS += $(obj)/conftest/headers.h
  NV_CONFTEST_HEADERS += $(NV_CONFTEST_COMPILE_TEST_HEADERS)
- 
  
 +.PHONY: conftest-verbose
 +conftest-verbose:
@@ -18,10 +18,10 @@ Description: dump the generated conftest headers
 +	@echo 'KBUILD_LDFLAGS=$(KBUILD_LDFLAGS)'
 +	@echo 'ARCH=$(ARCH)'
 +
+ 
  #
  # Generate a header file for a single conftest compile test. Each compile test
- # header depends on conftest.sh, as well as the generated conftest/headers.h
-@@ -146,6 +157,8 @@ define NV_GENERATE_COMPILE_TEST_HEADER
+@@ -131,6 +142,8 @@ define NV_GENERATE_COMPILE_TEST_HEADER
  	@mkdir -p $(obj)/conftest
  	@# concatenate /dev/null to prevent cat from hanging when $$^ is empty
  	@cat $$^ /dev/null > $$@
@@ -30,7 +30,7 @@ Description: dump the generated conftest headers
  endef
  
  #
-@@ -165,13 +178,17 @@ $(eval $(call NV_GENERATE_COMPILE_TEST_H
+@@ -150,13 +163,17 @@ $(eval $(call NV_GENERATE_COMPILE_TEST_HEADER,macros,$(NV_CONFTEST_MACRO_COMPILE_TESTS)))
  $(eval $(call NV_GENERATE_COMPILE_TEST_HEADER,symbols,$(NV_CONFTEST_SYMBOL_COMPILE_TESTS)))
  $(eval $(call NV_GENERATE_COMPILE_TEST_HEADER,types,$(NV_CONFTEST_TYPE_COMPILE_TESTS)))
  
@@ -49,14 +49,3 @@ Description: dump the generated conftest headers
 +	@cat $@
  
  clean-dirs := $(obj)/conftest
- 
-@@ -191,7 +208,8 @@ BUILD_SANITY_CHECKS = \
- 
- .PHONY: $(BUILD_SANITY_CHECKS)
- 
--$(BUILD_SANITY_CHECKS):
-+$(BUILD_SANITY_CHECKS): | conftest-verbose
-+	@echo " CONFTEST: $(notdir $@)"
- 	@$(NV_CONFTEST_CMD) $@ full_output
- 
- # Perform all sanity checks before generating the conftest headers
