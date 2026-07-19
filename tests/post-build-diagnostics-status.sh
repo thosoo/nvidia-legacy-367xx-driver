@@ -30,3 +30,17 @@ for diagnostic in \
         exit 1
     }
  done
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+cat > "$tmp/binary-build.log" <<'LOGEOF'
+gcc-12 -Wp,-MMD,/work/binary-source/kernel-source-tree/nvidia/.nv-frontend.o.d -nostdinc -c -o /work/binary-source/kernel-source-tree/nvidia/nv-frontend.o /work/binary-source/kernel-source-tree/nvidia/nv-frontend.c
+LOGEOF
+if grep -Eq '(^|[[:space:]])CC[[:space:]]+\[M\]' "$tmp/binary-build.log" || \
+   { grep -Eq 'kernel-source-tree/.*/(nvidia|nvidia-modeset|nvidia-drm|nvidia-uvm)/[^[:space:]]+\.c' "$tmp/binary-build.log" && \
+     grep -Eq '[[:space:]]-c[[:space:]]' "$tmp/binary-build.log" && \
+     grep -Eq '[[:space:]]-o[[:space:]][^[:space:]]*kernel-source-tree/(nvidia|nvidia-modeset|nvidia-drm|nvidia-uvm)/[^[:space:]]+\.o' "$tmp/binary-build.log"; }; then
+    :
+else
+    echo "module compiler detection misses explicit gcc module compile commands" >&2
+    exit 1
+fi

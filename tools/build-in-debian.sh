@@ -284,7 +284,10 @@ set +e
     else
         echo no > /work/logs/kernel-kbuild-invoked.txt
     fi
-    if grep -Eq '(^|[[:space:]])CC[[:space:]]+\[M\]' /work/logs/binary-build.log; then
+    if grep -Eq '(^|[[:space:]])CC[[:space:]]+\[M\]' /work/logs/binary-build.log || \
+       { grep -Eq 'kernel-source-tree/.*/(nvidia|nvidia-modeset|nvidia-drm|nvidia-uvm)/[^[:space:]]+\.c' /work/logs/binary-build.log && \
+         grep -Eq '[[:space:]]-c[[:space:]]' /work/logs/binary-build.log && \
+         grep -Eq '[[:space:]]-o[[:space:]][^[:space:]]*kernel-source-tree/(nvidia|nvidia-modeset|nvidia-drm|nvidia-uvm)/[^[:space:]]+\.o' /work/logs/binary-build.log; }; then
         echo yes > /work/logs/module-c-compiler-reached.txt
     else
         echo no > /work/logs/module-c-compiler-reached.txt
