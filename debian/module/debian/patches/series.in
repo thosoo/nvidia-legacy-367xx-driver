@@ -8,6 +8,7 @@ do-div-cast.patch
 0003-backport-set_-memory-pages-_array-_uc-changes-from-5.patch
 0004-fix-conftest-includes.patch
 backport-linux-standard-headers.patch
+backport-asm-kmap_types-header.patch
 0008-backport-nvidia-drm-helper.h-inclusion-from-450.51.patch
 0021-backport-acpi_op_remove-changes-from-470.182.03.patch
 0022-backport-drm_connector_has_override_edid-changes-fro.patch

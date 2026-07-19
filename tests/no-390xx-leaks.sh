@@ -17,6 +17,8 @@ rg -n '390xx|390\.157|legacy-390|nvidia-legacy-390xx|NVIDIA_LEGACY[[:space:]]*[:
   --glob '!debian/changelog' \
   --glob '!debian/patches/debian-changes' \
   --glob '!debian/patches/man-fixes-nvidia-smi.patch' \
+  --glob '!debian/module/debian/patches/backport-asm-kmap_types-header.patch' \
+  --glob '!debian/module/debian/patches/kmap-types-reference-audit.md' \
   --glob '!README.md' \
   --glob '!tests/no-390xx-leaks.sh' \
   $files
