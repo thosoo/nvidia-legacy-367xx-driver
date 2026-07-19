@@ -24,8 +24,8 @@ do-div-cast.patch
 #HAS_UVM#0034-fix-typos.patch
 0038-backport-drm_unlocked_ioctl_flag_present-changes-fro.patch
 0040-backport-screen_info-changes-from-470.239.06.patch
-0041-backport-CONFIG_MITIGATION_RETPOLINE-changes-from-47.patch
-0043-backport-follow_pfn-changes-from-550.90.07.patch
+# 367.134 has no nv-retpoline include: 0041-backport-CONFIG_MITIGATION_RETPOLINE-changes-from-47.patch
+# 367.134 already guards os_lookup_user_io_memory with NV_FOLLOW_PFN_PRESENT: 0043-backport-follow_pfn-changes-from-550.90.07.patch
 0046-backport-nv_get_kern_phys_address-changes-from-555.4.patch
 0047-backport-drm_output_poll_changed-changes-from-535.21.patch
 0048-backport-cmd_symlink-changes-from-550.142.patch

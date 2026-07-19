@@ -215,8 +215,10 @@ fi
     fi
 } > /work/logs/module-quilt-unapplied.txt
 cat /work/logs/module-quilt-applied.txt /work/logs/module-quilt-unapplied.txt > /work/logs/module-quilt-state.txt
+awk 'NF { print; exit }' /work/logs/module-quilt-unapplied.txt \
+    > /work/logs/module-quilt-failed-patch.txt || true
 {
-    for reject_root in         /work/binary-source/kernel-source-tree         /work/binary-source/build/kernel
+    for reject_root in         /work/binary-source/kernel-source-tree         /work/binary-source/kernel-source-tree/.pc
     do
         if test -d "$reject_root"; then
             find "$reject_root" -type f -name '*.rej' -print
