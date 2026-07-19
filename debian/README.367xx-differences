@@ -30,3 +30,13 @@ The shipped 367.134 JSON uses Vulkan ICD file format `1.0.0`, API version
 is a packaging-owned copy of that 367.134 structure with the library path
 replaced by `__NV_VK_ICD__` so the existing GLVND and non-GLVND substitutions
 can continue to generate the two Debian package variants.
+
+Supported PCI IDs
+-----------------
+
+The legacy Debian packaging split `nv-readme.ids` into common and
+architecture-specific fragments for multi-architecture NVIDIA releases.  This
+fork is amd64-only, and `debian/nv-readme.ids.amd64` is the single checked-in
+367.134 baseline.  It is generated from the supported-GPU appendix in the
+verified NVIDIA-Linux-x86_64-367.134 README with the same parser used by
+`debian/rules`; the GRID K1 PCI ID `10DE0FF2` must remain present.

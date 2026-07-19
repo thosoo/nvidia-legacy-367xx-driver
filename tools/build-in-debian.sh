@@ -109,12 +109,16 @@ grep -Fx "amd64/$runfile" /work/logs/amd64-orig-contents.txt
 sha256sum "/work/$main_orig" > /work/logs/main-orig.sha256
 sha256sum "/work/$amd64_orig" > /work/logs/amd64-orig.sha256
 find "/work/import/NVIDIA-Linux-x86_64-$version" -type f -printf '%P\n' | sort > /work/logs/inventory-367.134.txt
+sh /work/packaging/tests/supported-pci-ids.sh \
+    "/work/import/NVIDIA-Linux-x86_64-$version" \
+    /work/logs/inventory-supported-pci-ids-367.134.txt
 
 cd /work/packaging
 tests/no-390xx-leaks.sh
 tests/amd64-only.sh
 tests/no-proprietary-artifacts.sh
 tests/generated-control-drift.sh
+tests/supported-pci-ids.sh
 
 set_stage source-build
 set +e
@@ -158,7 +162,12 @@ cat /work/logs/extracted-script-modes.txt
 sh tests/no-390xx-leaks.sh
 sh tests/amd64-only.sh
 sh tests/generated-control-drift.sh
-sh tests/vulkan-icd-json.sh . || test ! -e glvnd/nvidia_icd.json
+sh tests/supported-pci-ids.sh
+if test -e glvnd/nvidia_icd.json || test -e nonglvnd/nvidia_icd.json; then
+    test -e glvnd/nvidia_icd.json
+    test -e nonglvnd/nvidia_icd.json
+    sh tests/vulkan-icd-json.sh .
+fi
 
 set_stage binary-build
 set +e

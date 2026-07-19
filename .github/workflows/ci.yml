@@ -12,6 +12,7 @@ jobs:
       - run: tests/amd64-only.sh
       - run: tests/no-proprietary-artifacts.sh
       - run: tests/generated-control-drift.sh
+      - run: tests/supported-pci-ids.sh
       - run: test -z "$(git status --porcelain)"
   bookworm-package:
     name: bookworm-package

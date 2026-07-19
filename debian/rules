@@ -165,8 +165,8 @@ nonglvnd/nvidia_icd.json: unpack-stamp $(packaging_nvidia_icd_template)
 	mkdir -p $(@D)
 	sed 's/__NV_VK_ICD__/libGL.so.1/' "$(nvidia_icd_template)" > $@
 
-debian/nv-readme.ids: debian/nv-readme.ids.common debian/nv-readme.ids.$(DEB_HOST_ARCH)
-	cat $^ | sort -u > $@
+debian/nv-readme.ids: debian/nv-readme.ids.$(DEB_HOST_ARCH)
+	cp $< $@
 
 nv-readme.ids: unpack-stamp debian/nv-readme.ids
 	sed -r	-e '0,/A. Supported|APPENDIX A: SUPPORTED/d' \
