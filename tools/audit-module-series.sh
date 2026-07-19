@@ -100,6 +100,43 @@ with (report/'module-patch-audit.md').open('w') as f:
     f.write('| order | patch | cumulative | independent | default | forced | classification | contamination |\n|---:|---|---|---|---|---|---|---|\n')
     for r in rows: f.write(f'| {r[0]} | {r[1]} | {r[4]} | {r[5]} | {r[6]} | {r[7]} | {r[14]} | {r[16]} |\n')
 (report/'module-patch-first-strict-failure.txt').write_text(first_failure+'\n')
+(report/'first-strict-failure.txt').write_text(first_failure+'\n')
+
+# Production-mode cumulative application: this models normal quilt/patch behavior
+# separately from the zero-fuzz strict audit. Later production results are
+# dependency-blocked only after the first real reject.
+prod=tempfile.mkdtemp(prefix='module-audit-prod.'); prodtree=pathlib.Path(prod)/'tree'; shutil.copytree(tree,prodtree,symlinks=True)
+first_prod_reject=''; first_fuzzed=''; first_offset=''
+prod_rows=[]; prod_blocked=False
+for p in patches:
+    if prod_blocked:
+        prod_rows.append(f'{p}\tdependency-blocked')
+        continue
+    r=run(['patch','-p1','-i',str(patchdir/p)],prodtree)
+    out=r.stdout or ''
+    if r.returncode != 0:
+        first_prod_reject = first_prod_reject or p
+        prod_rows.append(f'{p}\treject')
+        prod_blocked=True
+        continue
+    if 'fuzz' in out and not first_fuzzed:
+        first_fuzzed=p
+    if 'offset' in out and not first_offset:
+        first_offset=p
+    status='clean'
+    if 'fuzz' in out and 'offset' in out:
+        status='fuzz-and-offset'
+    elif 'fuzz' in out:
+        status='fuzz'
+    elif 'offset' in out:
+        status='offset'
+    prod_rows.append(f'{p}\t{status}')
+(report/'first-production-reject.txt').write_text(first_prod_reject+'\n')
+(report/'first-fuzzed-patch.txt').write_text(first_fuzzed+'\n')
+(report/'first-offset-patch.txt').write_text(first_offset+'\n')
+(report/'module-patch-production-results.tsv').write_text('patch\tproduction result\n'+'\n'.join(prod_rows)+'\n')
+shutil.rmtree(prod, ignore_errors=True)
+
 (report/'module-patch-touched-files.txt').write_text('\n'.join(touched)+'\n')
 (report/'module-patch-rejects.txt').write_text('\n\n'.join(rejects)+'\n')
 (report/'module-patch-fuzz-offsets.txt').write_text('\n\n'.join(fuzz)+'\n')
