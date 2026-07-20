@@ -335,6 +335,16 @@ set +e
     else
         echo no > /work/logs/kernel-compilation-reached.txt
     fi
+    if test -d "$module_source/conftest-sg-diagnostics"; then
+        mkdir -p /work/logs/conftest-sg-diagnostics
+        find "$module_source/conftest-sg-diagnostics" -type f \
+            ! -name '*.o' ! -name '*.ko' ! -name '*.cmd' \
+            -exec cp -v {} /work/logs/conftest-sg-diagnostics/ \; \
+            > /work/logs/conftest-sg-diagnostics-files.txt 2>&1 || \
+            echo "copy SG conftest diagnostics failed" >> /work/logs/post-build-diagnostics-failures.txt
+    else
+        echo "no SG conftest diagnostics directory" > /work/logs/conftest-sg-diagnostics-files.txt
+    fi
     if test -e glvnd/nvidia_icd.json && test -e nonglvnd/nvidia_icd.json; then
         sh tests/vulkan-icd-json.sh . > /work/logs/vulkan-icd-json.log 2>&1
         vulkan_icd_status=$?

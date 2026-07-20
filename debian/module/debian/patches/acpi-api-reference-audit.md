@@ -2,19 +2,27 @@
 
 NVIDIA 367.134 directly traverses `struct acpi_device.children` and list member
 `node`, and maps handles with `acpi_bus_get_device()`.  Linux 6.1/6.12 no longer
-expose those internals.  Debian 390xx, Debian 340xx backports, and later NVIDIA
-470+ code move this class of logic to public ACPI helpers.  ELRepo's exact
-367.134 port is treated as a negative baseline where it does not modify this
-API.
+expose those internals.  The newer helper direction seen in later proprietary
+branches and Debian legacy ports must be filtered for external-module usability:
+`acpi_fetch_acpi_dev()`, `acpi_get_acpi_dev()`, `acpi_dev_for_each_child()` and
+`device_for_each_child()` are not selected here because the current Debian target
+kernels do not provide them as unrestricted proprietary-module dependencies.
+ELRepo's exact 367.134 port remains a negative baseline where it does not supply
+an export-safe fix for this API family.
 
-The selected design introduces local 367 wrappers: `nv_acpi_get_device()` uses
-`acpi_fetch_acpi_dev()` when present and releases the reference with
-`put_device(&adev->dev)` through `nv_acpi_put_device()`; legacy kernels retain
-`acpi_bus_get_device()` without a synthetic reference release.  Child traversal
-must use public child iteration (`acpi_dev_for_each_child`) when present rather
-than recreating private `children` or `node` members.
+The selected 367-specific design uses existing unrestricted ACPI handle APIs.
+When a compile probe proves the old `struct acpi_device.children` and `node`
+fields are available, the legacy direct-list code remains for old kernels.  On
+modern kernels the code walks direct child ACPI handles with `acpi_walk_namespace()`
+at depth 1, stores only `acpi_handle` values, and preserves the 367.134 `_ADR`
+acceptance set, display ordering, `NV_MAXNUM_DISPLAY_DEVICES` limit and
+`default_display_mask` early-stop behavior.
 
-Lifetime requirements: every `acpi_fetch_acpi_dev()` acquisition must be paired
-with `nv_acpi_put_device()` on all success and failure paths.  Method init and
-uninit must remain symmetric, and DDC traversal must not hold stale child
-pointers after callback completion.
+The NVIF notifier path is handled separately from child discovery.  Modern
+kernels install and remove the notifier directly by `acpi_handle` using
+`acpi_install_notify_handler()` / `acpi_remove_notify_handler()`, with a private
+`nv_acpi_t` context retained only by the driver.  This avoids borrowed
+`struct acpi_device *` lifetime assumptions and removes the invalid
+`acpi_fetch_acpi_dev()` / `put_device(&adev->dev)` pairing.  The legacy
+`struct acpi_device` notifier path remains only where the driver already owns a
+device from ACPI driver callbacks or where old struct members are probed present.

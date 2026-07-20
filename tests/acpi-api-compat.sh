@@ -3,26 +3,34 @@ set -eu
 repo=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 patch=$repo/debian/module/debian/patches/backport-acpi-api-compat.patch
 
-grep -F 'acpi_fetch_acpi_dev' "$patch" >/dev/null
-grep -F 'acpi_dev_for_each_child' "$patch" >/dev/null
-grep -F 'put_device(&device->dev)' "$patch" >/dev/null
+grep -F 'NV_ACPI_DEVICE_HAS_CHILDREN_AND_NODE' "$patch" >/dev/null
+grep -F 'NV_ACPI_WALK_NAMESPACE(ACPI_TYPE_DEVICE' "$patch" >/dev/null
+grep -F 'nv_acpi_add_one_child_handle' "$patch" >/dev/null
+grep -F 'nv_acpi_find_lcd_child_handle' "$patch" >/dev/null
+grep -F 'nv_install_notifier_handle' "$patch" >/dev/null
+grep -F 'nv_uninstall_notifier_handle' "$patch" >/dev/null
 test -f "$repo/debian/module/debian/patches/acpi-api-reference-audit.md"
 
-# Modern ACPI traversal must use the ACPI child iterator callback API, not raw
-# struct device internals or removed acpi_device child-list members.
+# Modern ACPI must not depend on GPL-only helpers or raw struct device child
+# internals. Legacy acpi_device list traversal may remain only behind the field
+# existence probe.
+! grep -F 'acpi_fetch_acpi_dev' "$patch" >/dev/null
+! grep -F 'acpi_dev_for_each_child' "$patch" >/dev/null
+! grep -F 'put_device(&device->dev)' "$patch" >/dev/null
 ! grep -F 'device->dev.children' "$patch" >/dev/null
 ! grep -F 'dev.parent' "$patch" >/dev/null
-! grep -F 'list_for_each_entry(dev, &device->dev.children' "$patch" >/dev/null
 
-grep -F 'static int nv_acpi_add_one_child(struct acpi_device *dev, void *data)' "$patch" >/dev/null
-grep -F 'static int nv_acpi_find_lcd_child(struct acpi_device *dev, void *data)' "$patch" >/dev/null
-grep -F 'acpi_dev_for_each_child(device, nv_acpi_add_one_child, &child_data)' "$patch" >/dev/null
-grep -F 'acpi_dev_for_each_child(device, nv_acpi_find_lcd_child, &child_data)' "$patch" >/dev/null
-
-# The public-helper port should remove the now-unused acpi_bus_get_device status
-# variable from nv_acpi_methods_init(), and uninit must acquire a device before
-# notifier teardown.
-! grep -F '+    int retVal = -1;' "$patch" >/dev/null
-grep -F '+    device = nv_acpi_get_device(nvif_parent_gpu_handle);' "$patch" >/dev/null
-grep -F '+    if (device)' "$patch" >/dev/null
-grep -F '+        nv_uninstall_notifier(device, nv_acpi_event);' "$patch" >/dev/null
+python3 - "$patch" <<'PY'
+import pathlib, sys
+lines = pathlib.Path(sys.argv[1]).read_text().splitlines()
+for i, line in enumerate(lines):
+    if not line.startswith('+'):
+        continue
+    if not any(needle in line for needle in ('device->children', 'struct acpi_device, node', 'acpi_bus_get_device')):
+        continue
+    if 'struct list_head *children = &device->children' in line:
+        continue
+    window = '\n'.join(lines[max(0, i-40):i+1])
+    if 'NV_ACPI_DEVICE_HAS_CHILDREN_AND_NODE' not in window:
+        raise SystemExit(f'{line.strip()} is not guarded by NV_ACPI_DEVICE_HAS_CHILDREN_AND_NODE')
+PY

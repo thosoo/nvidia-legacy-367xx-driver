@@ -7,6 +7,10 @@ grep -F '#include <linux/scatterlist.h>' "$patch" >/dev/null
 grep -F 'sg_alloc_table(table, nents, gfp)' "$patch" >/dev/null
 grep -F 'sg_alloc_table_from_pages(table, pages, n_pages,' "$patch" >/dev/null
 grep -F 'NV_SG_ALLOC_TABLE_FROM_PAGES_PRESENT' "$patch" >/dev/null
+grep -F 'append_conftest "types"' "$patch" >/dev/null
+! grep -F 'compile_check_conftest "$CODE" "NV_SG_ALLOC_TABLE_PRESENT" "" "functions"' "$patch" >/dev/null
+! grep -F 'compile_check_conftest "$CODE" "NV_SG_ALLOC_TABLE_FROM_PAGES_PRESENT" "" "functions"' "$patch" >/dev/null
+
 # The regression must not fabricate checked-in conftest evidence.
 for artifact in \
     "$repo/sg-conftest-source.c" \
@@ -19,6 +23,7 @@ do
         exit 1
     fi
 done
+
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 cat > "$tmp/sg-conftest-source.c" <<'CEOF'
@@ -56,7 +61,6 @@ sh -c "$cmd" > "$tmp/sg-conftest-stdout.txt" 2> "$tmp/sg-conftest-stderr.txt"
 status=$?
 set -e
 printf '%s\n' "$status" > "$tmp/sg-conftest-result.txt"
-cat "$tmp/sg-conftest-stderr.txt" >/dev/null
 test "$status" -eq 0
 test -s "$tmp/sg-conftest-command.txt"
 test -s "$tmp/sg-conftest-result.txt"
