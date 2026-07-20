@@ -52,6 +52,7 @@ if [ "$mode" = pr5 ]; then
         fix-sg-allocation-conftests.patch \
         backport-acpi-api-compat.patch \
         backport-dma-mask-api.patch \
+        backport-procfs-api-compat.patch \
         normalize-module-instances-warning.patch
     do
         apply_patch_checked "$patch_name" --fuzz=0

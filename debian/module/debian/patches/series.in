@@ -17,6 +17,7 @@ backport-swiotlb-detection.patch
 fix-sg-allocation-conftests.patch
 backport-acpi-api-compat.patch
 backport-dma-mask-api.patch
+backport-procfs-api-compat.patch
 normalize-module-instances-warning.patch
 0008-backport-nvidia-drm-helper.h-inclusion-from-450.51.patch
 0021-backport-acpi_op_remove-changes-from-470.182.03.patch

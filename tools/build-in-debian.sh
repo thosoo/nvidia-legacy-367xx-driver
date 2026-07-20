@@ -158,6 +158,7 @@ run_repository_test swiotlb-detection tests/swiotlb-detection.sh
 run_repository_test sg-allocation-conftest tests/sg-allocation-conftest.sh
 run_repository_test acpi-api-compat tests/acpi-api-compat.sh
 run_repository_test dma-mask-api tests/dma-mask-api.sh
+run_repository_test procfs-api-compat tests/procfs-api-compat.sh
 
 set_stage module-series-integrity
 module_integrity_tree=$(tools/prepare-kernel-tree.sh "$suite" /work/module-series-integrity)
@@ -360,6 +361,16 @@ set +e
             echo "copy PCI DMA conftest diagnostics failed" >> /work/logs/post-build-diagnostics-failures.txt
     else
         echo "no PCI DMA conftest diagnostics directory" > /work/logs/conftest-pci-dma-diagnostics-files.txt
+    fi
+    if test -d "$module_source/conftest-procfs-diagnostics"; then
+        mkdir -p /work/logs/conftest-procfs-diagnostics
+        find "$module_source/conftest-procfs-diagnostics" -type f \
+            ! -name '*.o' ! -name '*.ko' ! -name '*.cmd' \
+            -exec cp -v {} /work/logs/conftest-procfs-diagnostics/ \; \
+            > /work/logs/conftest-procfs-diagnostics-files.txt 2>&1 || \
+            echo "copy procfs conftest diagnostics failed" >> /work/logs/post-build-diagnostics-failures.txt
+    else
+        echo "no procfs conftest diagnostics directory" > /work/logs/conftest-procfs-diagnostics-files.txt
     fi
     if test -e glvnd/nvidia_icd.json && test -e nonglvnd/nvidia_icd.json; then
         sh tests/vulkan-icd-json.sh . > /work/logs/vulkan-icd-json.log 2>&1
