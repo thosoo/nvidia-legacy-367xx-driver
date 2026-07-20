@@ -8,7 +8,7 @@ Description: Backport procfs private-data and proc_ops compatibility
 Origin: backport, NVIDIA legacy procfs compatibility design adapted for 367.134
 Forwarded: not-needed
 --- a/common/inc/nv-procfs.h	2019-12-17 13:33:51.000000000 +0000
-+++ b/common/inc/nv-procfs.h	2026-07-20 15:24:06.091620049 +0000
++++ b/common/inc/nv-procfs.h	2026-07-20 16:55:06.253411648 +0000
 @@ -22,6 +22,34 @@
  #define NV_SET_PROC_ENTRY_OWNER(entry)
  #endif
@@ -91,9 +91,9 @@ Forwarded: not-needed
      };
  
  #endif  /* CONFIG_PROC_FS */
---- a/conftest.sh	2026-07-20 15:24:49.919567980 +0000
-+++ b/conftest.sh	2026-07-20 15:24:31.139584816 +0000
-@@ -258,6 +258,41 @@
+--- a/conftest.sh	2026-07-20 16:55:06.013410460 +0000
++++ b/conftest.sh	2026-07-20 16:55:07.629418454 +0000
+@@ -258,6 +258,60 @@
      fi
  }
  
@@ -124,10 +124,29 @@ Forwarded: not-needed
 +        rm -f "$OBJ"
 +        echo "#define ${DEF} ${VAL}" | append_conftest "${CAT}"
 +        echo "#define ${DEF} ${VAL}" > "$DIAGDIR/$NAME.definition"
++        case "$DEF" in
++            NV_PROC_OPS_PRESENT)
++                echo "struct proc_ops" > "$DIAGDIR/selected-operation-table-type"
++            ;;
++            NV_PDE_DATA_LOWER_CASE_PRESENT)
++                echo "pde_data(inode)" > "$DIAGDIR/selected-private-data-accessor"
++            ;;
++            NV_PDE_DATA_UPPER_CASE_PRESENT)
++                test -f "$DIAGDIR/selected-private-data-accessor" || \
++                    echo "PDE_DATA(inode)" > "$DIAGDIR/selected-private-data-accessor"
++            ;;
++            NV_PDE_STRUCT_ACCESS_PRESENT)
++                test -f "$DIAGDIR/selected-private-data-accessor" || \
++                    echo "PDE(inode)->data" > "$DIAGDIR/selected-private-data-accessor"
++            ;;
++        esac
 +    else
 +        echo no > "$DIAGDIR/$NAME.object-created"
 +        echo "#undef ${DEF}" | append_conftest "${CAT}"
 +        echo "#undef ${DEF}" > "$DIAGDIR/$NAME.definition"
++        if [ "$DEF" = "NV_PROC_OPS_PRESENT" ]; then
++            echo "struct file_operations" > "$DIAGDIR/selected-operation-table-type"
++        fi
 +    fi
 +    rm -f "$SRC"
 +}
@@ -135,7 +154,7 @@ Forwarded: not-needed
  export_symbol_present_conftest() {
      #
      # Check Module.symvers to see whether the given symbol is present.
-@@ -1622,17 +1657,71 @@
+@@ -1622,17 +1676,71 @@
          ;;
  
  
@@ -158,7 +177,7 @@ Forwarded: not-needed
 +                struct proc_dir_entry *parent,
 +                void *data)
 +            {
-+                return proc_create_data("nvidia-conftest", 0, parent,
++                return proc_create_data(\"nvidia-conftest\", 0, parent,
 +                    &conftest_proc_ops, data);
 +            }"
 +
@@ -166,14 +185,11 @@ Forwarded: not-needed
 +        ;;
 +
 +        pde_data_lower_case)
-             #
--            # Determine if the PDE_DATA() function is present.
++            #
 +            # Determine if pde_data() is available for procfs private data.
-             #
-             CODE="
-             #include <linux/proc_fs.h>
--            void conftest_PDE_DATA(void) {
--                PDE_DATA();
++            #
++            CODE="
++            #include <linux/proc_fs.h>
 +            void *conftest_pde_data_lower_case(const struct inode *inode)
 +            {
 +                return pde_data(inode);
@@ -197,11 +213,14 @@ Forwarded: not-needed
 +        ;;
 +
 +        pde_struct_access)
-+            #
+             #
+-            # Determine if the PDE_DATA() function is present.
 +            # Determine if the legacy PDE(inode)->data fallback is available.
-+            #
-+            CODE="
-+            #include <linux/proc_fs.h>
+             #
+             CODE="
+             #include <linux/proc_fs.h>
+-            void conftest_PDE_DATA(void) {
+-                PDE_DATA();
 +            void *conftest_pde_struct_access(const struct inode *inode)
 +            {
 +                return PDE(inode)->data;
@@ -212,8 +231,8 @@ Forwarded: not-needed
          ;;
  
          get_num_physpages)
---- a/nvidia/nvidia.Kbuild	2026-07-20 15:24:49.919567980 +0000
-+++ b/nvidia/nvidia.Kbuild	2026-07-20 15:24:38.319580025 +0000
+--- a/nvidia/nvidia.Kbuild	2026-07-20 16:55:06.013410460 +0000
++++ b/nvidia/nvidia.Kbuild	2026-07-20 16:55:06.253411648 +0000
 @@ -130,7 +130,10 @@
  NV_CONFTEST_FUNCTION_COMPILE_TESTS += efi_enabled
  NV_CONFTEST_FUNCTION_COMPILE_TESTS += is_swiotlb_active
@@ -227,7 +246,7 @@ Forwarded: not-needed
  NV_CONFTEST_FUNCTION_COMPILE_TESTS += pm_vt_switch_required
  NV_CONFTEST_FUNCTION_COMPILE_TESTS += drm_driver_has_set_busid
 --- a/nvidia-modeset/nvidia-modeset.Kbuild	2019-12-17 13:36:11.000000000 +0000
-+++ b/nvidia-modeset/nvidia-modeset.Kbuild	2026-07-20 15:24:38.319580025 +0000
++++ b/nvidia-modeset/nvidia-modeset.Kbuild	2026-07-20 16:55:06.253411648 +0000
 @@ -82,6 +82,9 @@
  NV_CONFTEST_TYPE_COMPILE_TESTS += file_inode
  NV_CONFTEST_TYPE_COMPILE_TESTS += proc_dir_entry
@@ -239,8 +258,8 @@ Forwarded: not-needed
 +NV_CONFTEST_FUNCTION_COMPILE_TESTS += pde_struct_access
  NV_CONFTEST_FUNCTION_COMPILE_TESTS += proc_remove
  NV_CONFTEST_FUNCTION_COMPILE_TESTS += timer_setup
---- a/nvidia-uvm/nvidia-uvm.Kbuild	2026-07-20 15:24:49.787568141 +0000
-+++ b/nvidia-uvm/nvidia-uvm.Kbuild	2026-07-20 15:24:38.319580025 +0000
+--- a/nvidia-uvm/nvidia-uvm.Kbuild	2026-07-20 16:55:05.765409234 +0000
++++ b/nvidia-uvm/nvidia-uvm.Kbuild	2026-07-20 16:55:06.253411648 +0000
 @@ -111,7 +111,10 @@
  NV_CONFTEST_FUNCTION_COMPILE_TESTS += vzalloc
  NV_CONFTEST_FUNCTION_COMPILE_TESTS += wait_on_bit_lock_argument_count
@@ -254,7 +273,7 @@ Forwarded: not-needed
  NV_CONFTEST_FUNCTION_COMPILE_TESTS += bitmap_clear
  NV_CONFTEST_FUNCTION_COMPILE_TESTS += usleep_range
 --- a/nvidia/nv-procfs.c	2019-12-17 13:33:51.000000000 +0000
-+++ b/nvidia/nv-procfs.c	2026-07-20 15:23:52.639641044 +0000
++++ b/nvidia/nv-procfs.c	2026-07-20 16:55:06.253411648 +0000
 @@ -411,13 +411,13 @@
      return ((status < 0) ? status : (int)count);
  }

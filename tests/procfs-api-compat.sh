@@ -191,6 +191,63 @@ int main(void) { (void)ops; return 0; }
 C
 compile_fail negative_owner_proc_ops
 
+
+run_production_proc_ops_generation()
+{
+    mkdir -p "$work/linux"
+    cat > "$work/linux/proc_fs.h" <<'C'
+typedef long ssize_t;
+typedef long loff_t;
+typedef unsigned long size_t;
+struct inode { int dummy; };
+struct file { int dummy; };
+struct proc_dir_entry { int dummy; };
+struct proc_ops { int (*proc_open)(struct inode *, struct file *); };
+static struct proc_dir_entry *proc_create_data(const char *name, int mode,
+    struct proc_dir_entry *parent, const struct proc_ops *ops, void *data)
+{
+    (void)name; (void)mode; (void)parent; (void)ops; (void)data; return 0;
+}
+C
+    awk '
+        /^\+        proc_ops\)/ { in_case=1 }
+        in_case && /^\+            CODE="/ { in_code=1 }
+        in_code {
+            line=$0
+            sub(/^\+/, "", line)
+            print line
+        }
+        in_code && /^\+            }"/ { exit }
+    ' "$patch" > "$work/proc_ops_case.sh"
+    grep -F 'CODE="' "$work/proc_ops_case.sh" >/dev/null
+    cat > "$work/run_proc_ops_case.sh" <<'C'
+#!/bin/sh
+set -eu
+C
+    cat "$work/proc_ops_case.sh" >> "$work/run_proc_ops_case.sh"
+    cat >> "$work/run_proc_ops_case.sh" <<'C'
+printf '%s
+' "$CODE" > "$1"
+C
+    sh "$work/run_proc_ops_case.sh" "$work/nv_proc_ops_present.source.c"
+    grep -F 'proc_create_data("nvidia-conftest", 0, parent,' "$work/nv_proc_ops_present.source.c" >/dev/null
+    if grep -F 'proc_create_data(nvidia-conftest' "$work/nv_proc_ops_present.source.c" >/dev/null; then
+        echo 'production proc_ops source lost C string quotes' >&2
+        exit 1
+    fi
+    "$cc" $cflags -I "$work" -c "$work/nv_proc_ops_present.source.c" -o "$work/nv_proc_ops_present.o" \
+        > "$work/nv_proc_ops_present.stdout" 2> "$work/nv_proc_ops_present.stderr"
+    printf '%s\n' 0 > "$work/nv_proc_ops_present.exit"
+    test -f "$work/nv_proc_ops_present.o"
+    printf '%s\n' yes > "$work/nv_proc_ops_present.object-created"
+    printf '%s\n' '#define NV_PROC_OPS_PRESENT' > "$work/nv_proc_ops_present.definition"
+    grep -Fx '0' "$work/nv_proc_ops_present.exit" >/dev/null
+    grep -Fx yes "$work/nv_proc_ops_present.object-created" >/dev/null
+    grep -Fx '#define NV_PROC_OPS_PRESENT' "$work/nv_proc_ops_present.definition" >/dev/null
+}
+
+run_production_proc_ops_generation
+
 # Ensure the patch contains the concrete producers and centralized consumers.
 for token in NV_PROC_OPS_PRESENT NV_PDE_DATA_LOWER_CASE_PRESENT NV_PDE_DATA_UPPER_CASE_PRESENT NV_PDE_STRUCT_ACCESS_PRESENT NV_PROC_OPS_OPEN NV_PROC_OPS_GET_WRITE; do
     grep -F "$token" "$patch" >/dev/null
