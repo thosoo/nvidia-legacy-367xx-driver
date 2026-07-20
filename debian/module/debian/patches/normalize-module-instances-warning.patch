@@ -1,0 +1,17 @@
+Description: default NV_BUILD_MODULE_INSTANCES for -Wundef builds
+ Preserve the original disabled-by-default behavior without suppressing -Wundef.
+Origin: vendor, NVIDIA build-system default semantics
+Forwarded: not-needed
+Last-Update: 2026-07-20
+
+--- a/common/inc/nv-linux.h
++++ b/common/inc/nv-linux.h
+@@ -40,6 +40,10 @@
+ #ifndef _NV_LINUX_H_
+ #define _NV_LINUX_H_
++
++#ifndef NV_BUILD_MODULE_INSTANCES
++#define NV_BUILD_MODULE_INSTANCES 0
++#endif
+ 
+ #include "nv.h"

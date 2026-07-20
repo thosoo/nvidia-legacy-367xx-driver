@@ -10,6 +10,14 @@ do-div-cast.patch
 backport-linux-standard-headers.patch
 backport-asm-kmap_types-header.patch
 backport-linux-ioctl32-header.patch
+backport-vmalloc-signature.patch
+backport-ioremap-nocache.patch
+backport-smp-call-return-types.patch
+backport-swiotlb-detection.patch
+fix-sg-allocation-conftests.patch
+backport-acpi-api-compat.patch
+backport-dma-mask-api.patch
+normalize-module-instances-warning.patch
 0008-backport-nvidia-drm-helper.h-inclusion-from-450.51.patch
 0021-backport-acpi_op_remove-changes-from-470.182.03.patch
 0022-backport-drm_connector_has_override_edid-changes-fro.patch

@@ -1,0 +1,99 @@
+Description: use public ACPI device helpers on modern kernels
+ Replace direct struct acpi_device child list/member traversal and removed
+ acpi_bus_get_device() assumptions with reference-managed helper wrappers.
+Origin: backport, NVIDIA 470+ ACPI compatibility design adapted to 367.134
+Forwarded: not-needed
+Last-Update: 2026-07-20
+
+--- a/conftest.sh
++++ b/conftest.sh
+@@ -2941,6 +2941,41 @@ compile_test() {
+             compile_check_conftest "$CODE" "NV_TIMER_SETUP_PRESENT" "" "functions"
+         ;;
++
++        acpi_fetch_acpi_dev)
++            CODE="
++            #include <linux/acpi.h>
++
++            struct acpi_device *conftest_acpi_fetch_acpi_dev(acpi_handle handle)
++            {
++                return acpi_fetch_acpi_dev(handle);
++            }"
++
++            compile_check_conftest "$CODE" "NV_ACPI_FETCH_ACPI_DEV_PRESENT" "" "functions"
++        ;;
++
++        acpi_dev_for_each_child)
++            CODE="
++            #include <linux/acpi.h>
++
++            static int conftest_child(struct acpi_device *adev, void *data)
++            {
++                return 0;
++            }
++
++            int conftest_acpi_dev_for_each_child(struct acpi_device *adev)
++            {
++                return acpi_dev_for_each_child(adev, conftest_child, NULL);
++            }"
++
++            compile_check_conftest "$CODE" "NV_ACPI_DEV_FOR_EACH_CHILD_PRESENT" "" "functions"
++        ;;
+ 
+         # When adding a new conftest entry, please use the correct format for
+--- a/nvidia/nvidia.Kbuild
++++ b/nvidia/nvidia.Kbuild
+@@ -118,6 +118,8 @@ NV_CONFTEST_FUNCTION_COMPILE_TESTS += acpi_bus_get_device
+ NV_CONFTEST_FUNCTION_COMPILE_TESTS += pci_domain_nr
+ NV_CONFTEST_FUNCTION_COMPILE_TESTS += pci_dma_mapping_error
++NV_CONFTEST_FUNCTION_COMPILE_TESTS += acpi_fetch_acpi_dev
++NV_CONFTEST_FUNCTION_COMPILE_TESTS += acpi_dev_for_each_child
+ NV_CONFTEST_FUNCTION_COMPILE_TESTS += sg_alloc_table
+--- a/nvidia/nv-acpi.c
++++ b/nvidia/nv-acpi.c
+@@ -200,6 +200,47 @@ static int nv_acpi_add(struct acpi_device *device)
+     return 0;
+ }
++
++static struct acpi_device *nv_acpi_get_device(acpi_handle handle)
++{
++#if defined(NV_ACPI_FETCH_ACPI_DEV_PRESENT)
++    return acpi_fetch_acpi_dev(handle);
++#elif defined(NV_ACPI_BUS_GET_DEVICE_PRESENT)
++    struct acpi_device *device = NULL;
++
++    if (ACPI_FAILURE(acpi_bus_get_device(handle, &device)))
++        return NULL;
++
++    return device;
++#else
++    return NULL;
++#endif
++}
++
++static void nv_acpi_put_device(struct acpi_device *device)
++{
++#if defined(NV_ACPI_FETCH_ACPI_DEV_PRESENT)
++    if (device != NULL)
++        put_device(&device->dev);
++#endif
++}
++
++#if defined(NV_ACPI_DEV_FOR_EACH_CHILD_PRESENT)
++struct nv_acpi_child_iter_data {
++    int (*fn)(struct acpi_device *, void *);
++    void *data;
++};
++
++static int nv_acpi_child_iter(struct acpi_device *child, void *data)
++{
++    struct nv_acpi_child_iter_data *iter = data;
++    return iter->fn(child, iter->data);
++}
++
++#define NV_ACPI_FOR_EACH_CHILD(parent, child, body)                      \
++    do {                                                                \
++        struct nv_acpi_child_iter_data __iter = { (body), NULL };       \
++        acpi_dev_for_each_child((parent), nv_acpi_child_iter, &__iter); \
++    } while (0)
++#endif
