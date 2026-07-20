@@ -1,0 +1,526 @@
+--- a/conftest.sh
++++ b/conftest.sh
+@@ -1883,6 +1883,26 @@ compile_test() {
+             compile_check_conftest "$CODE" "NV_MM_HAS_MMAP_SEM" "" "types"
+         ;;
+ 
++        mmap_assert_locked)
++            CODE="
++            #include <linux/mm.h>
++            void conftest_mmap_assert_locked(struct mm_struct *mm)
++            {
++                mmap_assert_locked(mm);
++            }"
++            compile_check_conftest "$CODE" "NV_MMAP_ASSERT_LOCKED_PRESENT" "" "types"
++        ;;
++
++        mmap_assert_write_locked)
++            CODE="
++            #include <linux/mm.h>
++            void conftest_mmap_assert_write_locked(struct mm_struct *mm)
++            {
++                mmap_assert_write_locked(mm);
++            }"
++            compile_check_conftest "$CODE" "NV_MMAP_ASSERT_WRITE_LOCKED_PRESENT" "" "types"
++        ;;
++
+         get_num_physpages)
+             #
+             # Determine if the get_num_physpages() function is
+--- a/nvidia-uvm/nvidia-uvm.Kbuild
++++ b/nvidia-uvm/nvidia-uvm.Kbuild
+@@ -122,6 +122,8 @@ NV_CONFTEST_FUNCTION_COMPILE_TESTS += kt
+ NV_CONFTEST_FUNCTION_COMPILE_TESTS += getrawmonotonic
+ NV_CONFTEST_FUNCTION_COMPILE_TESTS += mmap_read_lock
+ NV_CONFTEST_FUNCTION_COMPILE_TESTS += mm_has_mmap_sem
++NV_CONFTEST_FUNCTION_COMPILE_TESTS += mmap_assert_locked
++NV_CONFTEST_FUNCTION_COMPILE_TESTS += mmap_assert_write_locked
+ NV_CONFTEST_FUNCTION_COMPILE_TESTS += bitmap_clear
+ NV_CONFTEST_FUNCTION_COMPILE_TESTS += usleep_range
+ NV_CONFTEST_FUNCTION_COMPILE_TESTS += radix_tree_empty
+--- a/nvidia-uvm/uvm8.c
++++ b/nvidia-uvm/uvm8.c
+@@ -232,7 +232,7 @@ static void uvm_vm_open_managed(struct v
+     }
+ 
+     // At this point we are guaranteed that the mmap_sem is held in write mode.
+-    uvm_record_lock_mmap_sem_write(&current->mm->mmap_sem);
++    uvm_record_lock_mmap_sem_write(current->mm);
+ 
+     // Split vmas should always fall entirely within the old one, and be on one
+     // side.
+@@ -281,7 +281,7 @@ static void uvm_vm_open_managed(struct v
+ 
+ out:
+     uvm_va_space_up_write(va_space);
+-    uvm_record_unlock_mmap_sem_write(&current->mm->mmap_sem);
++    uvm_record_unlock_mmap_sem_write(current->mm);
+ }
+ 
+ static void uvm_vm_close_managed(struct vm_area_struct *vma)
+@@ -291,7 +291,7 @@ static void uvm_vm_close_managed(struct
+     bool is_uvm_teardown = false;
+ 
+     if (current->mm != NULL)
+-        uvm_record_lock_mmap_sem_write(&current->mm->mmap_sem);
++        uvm_record_lock_mmap_sem_write(current->mm);
+ 
+     if (current->mm == NULL) {
+         // current->mm will be NULL on process teardown. In that case, we want
+@@ -321,7 +321,7 @@ static void uvm_vm_close_managed(struct
+     uvm_va_space_up_write(va_space);
+ 
+     if (current->mm != NULL)
+-        uvm_record_unlock_mmap_sem_write(&current->mm->mmap_sem);
++        uvm_record_unlock_mmap_sem_write(current->mm);
+ }
+ 
+ static int uvm_vm_fault(struct vm_area_struct *vma, struct vm_fault *vmf)
+@@ -340,7 +340,7 @@ static int uvm_vm_fault(struct vm_area_s
+     // The mmap_sem might be held in write mode, but the mode doesn't matter for
+     // the purpose of lock ordering and we don't rely on it being in write
+     // anywhere so just record it as read mode in all cases.
+-    uvm_record_lock_mmap_sem_read(&vma->vm_mm->mmap_sem);
++    uvm_record_lock_mmap_sem_read(vma->vm_mm);
+ 
+     do {
+         if (status == NV_WARN_MORE_PROCESSING_REQUIRED) {
+@@ -392,7 +392,7 @@ out:
+         uvm_gpu_retain_mask(&gpus_to_check_for_ecc);
+ 
+     uvm_va_space_up_read(va_space);
+-    uvm_record_unlock_mmap_sem_read(&vma->vm_mm->mmap_sem);
++    uvm_record_unlock_mmap_sem_read(vma->vm_mm);
+ 
+     if (status == NV_OK) {
+         uvm_gpu_t *gpu;
+@@ -456,7 +456,7 @@ static void uvm_vm_open_semaphore_pool(s
+     bool is_fork = (vma->vm_mm != origin_vma->vm_mm);
+     NV_STATUS status;
+ 
+-    uvm_record_lock_mmap_sem_write(&current->mm->mmap_sem);
++    uvm_record_lock_mmap_sem_write(current->mm);
+ 
+     uvm_va_space_down_write(va_space);
+ 
+@@ -494,7 +494,7 @@ static void uvm_vm_open_semaphore_pool(s
+ 
+     uvm_va_space_up_write(va_space);
+ 
+-    uvm_record_unlock_mmap_sem_write(&current->mm->mmap_sem);
++    uvm_record_unlock_mmap_sem_write(current->mm);
+ }
+ 
+ // vm operations on semaphore pool allocations only control CPU mappings. Unmapping GPUs,
+@@ -504,7 +504,7 @@ static void uvm_vm_close_semaphore_pool(
+     uvm_va_space_t *va_space = uvm_va_space_get(vma->vm_file);
+ 
+     if (current->mm != NULL)
+-        uvm_record_lock_mmap_sem_write(&current->mm->mmap_sem);
++        uvm_record_lock_mmap_sem_write(current->mm);
+ 
+     uvm_va_space_down_read(va_space);
+ 
+@@ -513,7 +513,7 @@ static void uvm_vm_close_semaphore_pool(
+     uvm_va_space_up_read(va_space);
+ 
+     if (current->mm != NULL)
+-        uvm_record_unlock_mmap_sem_write(&current->mm->mmap_sem);
++        uvm_record_unlock_mmap_sem_write(current->mm);
+ }
+ 
+ static struct vm_operations_struct uvm_vm_ops_semaphore_pool =
+@@ -539,7 +539,7 @@ static int uvm_mmap(struct file *filp, s
+     if (status != NV_OK)
+         return -nv_status_to_errno(status);
+ 
+-    uvm_record_lock_mmap_sem_write(&current->mm->mmap_sem);
++    uvm_record_lock_mmap_sem_write(current->mm);
+ 
+     // UVM mappings are required to set offset == VA. This simplifies things
+     // since we don't have to worry about address aliasing (except for fork,
+@@ -625,7 +625,7 @@ out:
+     if (ret != 0 && vma_wrapper_allocated)
+         uvm_vma_wrapper_destroy(vma->vm_private_data);
+ 
+-    uvm_record_unlock_mmap_sem_write(&current->mm->mmap_sem);
++    uvm_record_unlock_mmap_sem_write(current->mm);
+ 
+     return ret;
+ }
+--- a/nvidia-uvm/uvm8_lock.h
++++ b/nvidia-uvm/uvm8_lock.h
+@@ -319,27 +319,28 @@ bool __uvm_thread_check_all_unlocked(voi
+   // the given mode.
+   #define uvm_check_locked(lock, mode) __uvm_check_locked((lock), (lock)->lock_order, (mode))
+ 
+-  // Helpers for recording and asserting mmap_sem state
+-  #define uvm_record_lock_mmap_sem_read(mmap_sem) \
+-          uvm_record_lock_raw((mmap_sem), UVM_LOCK_ORDER_MMAP_SEM, UVM_LOCK_MODE_SHARED)
++  // Helpers for recording and asserting mmap state. Track by mm_struct rather
++  // than by the address of the kernel's internal mmap semaphore.
++  #define uvm_record_lock_mmap_sem_read(mm) \
++          uvm_record_lock_raw((mm), UVM_LOCK_ORDER_MMAP_SEM, UVM_LOCK_MODE_SHARED)
+ 
+-  #define uvm_record_unlock_mmap_sem_read(mmap_sem) \
+-          uvm_record_unlock_raw((mmap_sem), UVM_LOCK_ORDER_MMAP_SEM, UVM_LOCK_MODE_SHARED, false)
++  #define uvm_record_unlock_mmap_sem_read(mm) \
++          uvm_record_unlock_raw((mm), UVM_LOCK_ORDER_MMAP_SEM, UVM_LOCK_MODE_SHARED, false)
+ 
+-  #define uvm_record_unlock_mmap_sem_read_out_of_order(mmap_sem) \
+-          uvm_record_unlock_raw((mmap_sem), UVM_LOCK_ORDER_MMAP_SEM, UVM_LOCK_MODE_SHARED, true)
++  #define uvm_record_unlock_mmap_sem_read_out_of_order(mm) \
++          uvm_record_unlock_raw((mm), UVM_LOCK_ORDER_MMAP_SEM, UVM_LOCK_MODE_SHARED, true)
+ 
+-  #define uvm_record_lock_mmap_sem_write(mmap_sem) \
+-          uvm_record_lock_raw((mmap_sem), UVM_LOCK_ORDER_MMAP_SEM, UVM_LOCK_MODE_EXCLUSIVE)
++  #define uvm_record_lock_mmap_sem_write(mm) \
++          uvm_record_lock_raw((mm), UVM_LOCK_ORDER_MMAP_SEM, UVM_LOCK_MODE_EXCLUSIVE)
+ 
+-  #define uvm_record_unlock_mmap_sem_write(mmap_sem) \
+-          uvm_record_unlock_raw((mmap_sem), UVM_LOCK_ORDER_MMAP_SEM, UVM_LOCK_MODE_EXCLUSIVE, false)
++  #define uvm_record_unlock_mmap_sem_write(mm) \
++          uvm_record_unlock_raw((mm), UVM_LOCK_ORDER_MMAP_SEM, UVM_LOCK_MODE_EXCLUSIVE, false)
+ 
+-  #define uvm_record_unlock_mmap_sem_write_out_of_order(mmap_sem) \
+-          uvm_record_unlock_raw((mmap_sem), UVM_LOCK_ORDER_MMAP_SEM, UVM_LOCK_MODE_EXCLUSIVE, true)
++  #define uvm_record_unlock_mmap_sem_write_out_of_order(mm) \
++          uvm_record_unlock_raw((mm), UVM_LOCK_ORDER_MMAP_SEM, UVM_LOCK_MODE_EXCLUSIVE, true)
+ 
+-  #define uvm_check_locked_mmap_sem(mmap_sem, mode) \
+-           __uvm_check_locked((mmap_sem), UVM_LOCK_ORDER_MMAP_SEM, (mode))
++  #define uvm_check_locked_mmap_sem(mm, mode) \
++           __uvm_check_locked((mm), UVM_LOCK_ORDER_MMAP_SEM, (mode))
+ 
+   // Helpers for recording RM API lock usage around UVM-RM interfaces
+   #define uvm_record_lock_rm_api() \
+@@ -391,32 +392,58 @@ bool __uvm_thread_check_all_unlocked(voi
+ #define uvm_assert_lockable_order(order) UVM_ASSERT(__uvm_check_lockable_order(order))
+ #define uvm_assert_unlocked_order(order) UVM_ASSERT(__uvm_check_unlocked_order(order))
+ 
+-// Helpers for locking mmap_sem and recording its usage
+-#define uvm_assert_mmap_sem_locked_mode(mmap_sem, mode) ({                          \
+-      typeof(mmap_sem) _sem = (mmap_sem);                                           \
+-      UVM_ASSERT(rwsem_is_locked(_sem) && uvm_check_locked_mmap_sem(_sem, (mode))); \
++static inline void uvm_mmap_assert_locked(struct mm_struct *mm)
++{
++#if defined(NV_MMAP_ASSERT_LOCKED_PRESENT)
++    mmap_assert_locked(mm);
++#elif defined(NV_MM_HAS_MMAP_SEM)
++    UVM_ASSERT(rwsem_is_locked(&mm->mmap_sem));
++#else
++#error "No supported mmap lock assertion API"
++#endif
++}
++
++static inline void uvm_mmap_assert_write_locked(struct mm_struct *mm)
++{
++#if defined(NV_MMAP_ASSERT_WRITE_LOCKED_PRESENT)
++    mmap_assert_write_locked(mm);
++#elif defined(NV_MM_HAS_MMAP_SEM)
++    UVM_ASSERT(rwsem_is_locked(&mm->mmap_sem));
++#else
++#error "No supported mmap write-lock assertion API"
++#endif
++}
++
++// Helpers for locking mmap state and recording its usage
++#define uvm_assert_mmap_sem_locked_mode(mm, mode) ({                         \
++      struct mm_struct *_mm = (mm);                                          \
++      if ((mode) == UVM_LOCK_MODE_EXCLUSIVE)                                 \
++          uvm_mmap_assert_write_locked(_mm);                                 \
++      else                                                                   \
++          uvm_mmap_assert_locked(_mm);                                       \
++      UVM_ASSERT(uvm_check_locked_mmap_sem(_mm, (mode)));                    \
+   })
+ 
+-#define uvm_assert_mmap_sem_locked(mmap_sem)        uvm_assert_mmap_sem_locked_mode((mmap_sem), UVM_LOCK_MODE_ANY)
+-#define uvm_assert_mmap_sem_locked_read(mmap_sem)   uvm_assert_mmap_sem_locked_mode((mmap_sem), UVM_LOCK_MODE_SHARED)
+-#define uvm_assert_mmap_sem_locked_write(mmap_sem)  uvm_assert_mmap_sem_locked_mode((mmap_sem), UVM_LOCK_MODE_EXCLUSIVE)
+-
+-#define uvm_down_read_mmap_sem(mmap_sem) ({             \
+-        typeof(mmap_sem) _sem = (mmap_sem);             \
+-        uvm_record_lock_mmap_sem_read(_sem);            \
+-        down_read(_sem);                                \
++#define uvm_assert_mmap_sem_locked(mm)        uvm_assert_mmap_sem_locked_mode((mm), UVM_LOCK_MODE_ANY)
++#define uvm_assert_mmap_sem_locked_read(mm)   uvm_assert_mmap_sem_locked_mode((mm), UVM_LOCK_MODE_SHARED)
++#define uvm_assert_mmap_sem_locked_write(mm)  uvm_assert_mmap_sem_locked_mode((mm), UVM_LOCK_MODE_EXCLUSIVE)
++
++#define uvm_down_read_mmap_sem(mm) ({             \
++        struct mm_struct *_mm = (mm);             \
++        uvm_record_lock_mmap_sem_read(_mm);       \
++        nv_mmap_read_lock(_mm);                   \
+     })
+ 
+-#define uvm_up_read_mmap_sem(mmap_sem) ({               \
+-        typeof(mmap_sem) _sem = (mmap_sem);             \
+-        up_read(_sem);                                  \
+-        uvm_record_unlock_mmap_sem_read(_sem);          \
++#define uvm_up_read_mmap_sem(mm) ({               \
++        struct mm_struct *_mm = (mm);             \
++        nv_mmap_read_unlock(_mm);                 \
++        uvm_record_unlock_mmap_sem_read(_mm);     \
+     })
+ 
+-#define uvm_up_read_mmap_sem_out_of_order(mmap_sem) ({      \
+-        typeof(mmap_sem) _sem = (mmap_sem);                 \
+-        up_read(_sem);                                      \
+-        uvm_record_unlock_mmap_sem_read_out_of_order(_sem); \
++#define uvm_up_read_mmap_sem_out_of_order(mm) ({      \
++        struct mm_struct *_mm = (mm);                 \
++        nv_mmap_read_unlock(_mm);                     \
++        uvm_record_unlock_mmap_sem_read_out_of_order(_mm); \
+     })
+ 
+ // Helper for calling a UVM-RM interface function with lock recording
+--- a/nvidia-uvm/uvm8_mem.c
++++ b/nvidia-uvm/uvm8_mem.c
+@@ -409,7 +409,7 @@ static NV_STATUS uvm_mem_map_cpu_sysmem_
+ 
+     UVM_ASSERT(uvm_mem_is_sysmem(mem));
+     UVM_ASSERT(mem->is_user_allocation);
+-    uvm_assert_mmap_sem_locked(&vma->vm_mm->mmap_sem);
++    uvm_assert_mmap_sem_locked(vma->vm_mm);
+ 
+     for (offset = 0; offset < mem->physical_allocation_size; offset += PAGE_SIZE) {
+         int ret = vm_insert_page(vma, (unsigned long)mem->user.addr + offset, uvm_mem_cpu_page(mem, offset));
+--- a/nvidia-uvm/uvm8_migrate.c
++++ b/nvidia-uvm/uvm8_migrate.c
+@@ -282,7 +282,7 @@ static NV_STATUS uvm_migrate(uvm_va_spac
+     uvm_va_block_context_t *va_block_context;
+     bool do_two_passes;
+ 
+-    uvm_assert_mmap_sem_locked(&current->mm->mmap_sem);
++    uvm_assert_mmap_sem_locked(current->mm);
+     uvm_assert_rwsem_locked(&va_space->lock);
+ 
+     if (!first_va_range || first_va_range->type != UVM_VA_RANGE_TYPE_MANAGED)
+@@ -467,7 +467,7 @@ NV_STATUS uvm_api_migrate(UVM_MIGRATE_PA
+     }
+ 
+     // mmap_sem will be needed if we have to create CPU mappings
+-    uvm_down_read_mmap_sem(&current->mm->mmap_sem);
++    uvm_down_read_mmap_sem(current->mm);
+     uvm_va_space_down_read(va_space);
+ 
+     if (!(params->flags & UVM_MIGRATE_FLAG_ASYNC)) {
+@@ -528,7 +528,7 @@ done:
+     //       benchmarks to see if a two-pass approach would be faster (first
+     //       pass pushes all GPU work asynchronously, second pass updates CPU
+     //       mappings synchronously).
+-    uvm_up_read_mmap_sem_out_of_order(&current->mm->mmap_sem);
++    uvm_up_read_mmap_sem_out_of_order(current->mm);
+ 
+     if (tracker_ptr) {
+         if (params->semaphoreAddress && status == NV_OK) {
+@@ -573,7 +573,7 @@ NV_STATUS uvm_api_migrate_range_group(UV
+     NvU32 migrate_flags = 0;
+ 
+     // mmap_sem will be needed if we have to create CPU mappings
+-    uvm_down_read_mmap_sem(&current->mm->mmap_sem);
++    uvm_down_read_mmap_sem(current->mm);
+     uvm_va_space_down_read(va_space);
+ 
+     if (uvm_uuid_is_cpu(&params->destinationUuid)) {
+@@ -616,7 +616,7 @@ done:
+     //       benchmarks to see if a two-pass approach would be faster (first
+     //       pass pushes all GPU work asynchronously, second pass updates CPU
+     //       mappings synchronously).
+-    uvm_up_read_mmap_sem_out_of_order(&current->mm->mmap_sem);
++    uvm_up_read_mmap_sem_out_of_order(current->mm);
+ 
+     tracker_status = uvm_tracker_wait_deinit(&local_tracker);
+     uvm_va_space_up_read(va_space);
+--- a/nvidia-uvm/uvm8_policy.c
++++ b/nvidia-uvm/uvm8_policy.c
+@@ -274,7 +274,7 @@ static NV_STATUS accessed_by_set(uvm_va_
+     // We need mmap_sem if we might create CPU mappings
+     if (uvm_uuid_is_cpu(processor_uuid)) {
+         processor_id = UVM_CPU_ID;
+-        uvm_down_read_mmap_sem(&current->mm->mmap_sem);
++        uvm_down_read_mmap_sem(current->mm);
+     }
+ 
+     uvm_va_space_down_write(va_space);
+@@ -322,7 +322,7 @@ done:
+     uvm_va_space_up_write(va_space);
+ 
+     if (processor_id == UVM_CPU_ID)
+-        uvm_up_read_mmap_sem(&current->mm->mmap_sem);
++        uvm_up_read_mmap_sem(current->mm);
+ 
+     return status;
+ }
+@@ -517,7 +517,7 @@ static NV_STATUS read_duplication_set(uv
+         return NV_ERR_INVALID_ADDRESS;
+ 
+     // We need mmap_sem as we may create CPU mappings
+-    uvm_down_read_mmap_sem(&current->mm->mmap_sem);
++    uvm_down_read_mmap_sem(current->mm);
+     uvm_va_space_down_write(va_space);
+ 
+     status = uvm_va_space_split_span_as_needed(va_space,
+@@ -560,7 +560,7 @@ static NV_STATUS read_duplication_set(uv
+ 
+ done:
+     uvm_va_space_up_write(va_space);
+-    uvm_up_read_mmap_sem(&current->mm->mmap_sem);
++    uvm_up_read_mmap_sem(current->mm);
+     return status;
+ }
+ 
+--- a/nvidia-uvm/uvm8_tools.c
++++ b/nvidia-uvm/uvm8_tools.c
+@@ -225,9 +225,9 @@ static NV_STATUS map_user_pages(NvU64 us
+         goto fail;
+     }
+ 
+-    down_read(&current->mm->mmap_sem);
++    nv_mmap_read_lock(current->mm);
+     ret = NV_GET_USER_PAGES(user_va, num_pages, FOLL_WRITE, *pages, vmas);
+-    up_read(&current->mm->mmap_sem);
++    nv_mmap_read_unlock(current->mm);
+     if (ret != num_pages) {
+         status = NV_ERR_INVALID_ARGUMENT;
+         goto fail;
+--- a/nvidia-uvm/uvm8_va_block.c
++++ b/nvidia-uvm/uvm8_va_block.c
+@@ -5528,7 +5528,7 @@ static NV_STATUS block_cpu_insert_page(u
+     // vma->vm_mm for us, so we can safely operate on the vma, but we can't use
+     // uvm_va_range_vma_current.
+     vma = uvm_va_range_vma(va_range);
+-    uvm_assert_mmap_sem_locked(&vma->vm_mm->mmap_sem);
++    uvm_assert_mmap_sem_locked(vma->vm_mm);
+     uvm_assert_mutex_locked(&block->lock);
+     UVM_ASSERT(block->cpu.pages[page_index]);
+ 
+@@ -8962,7 +8962,7 @@ NV_STATUS uvm8_test_change_pte_mapping(U
+ 
+     // mmap_sem isn't needed for invalidating CPU mappings, but it will be
+     // needed for inserting them.
+-    uvm_down_read_mmap_sem(&current->mm->mmap_sem);
++    uvm_down_read_mmap_sem(current->mm);
+     uvm_va_space_down_read(va_space);
+ 
+     if (uvm_uuid_is_cpu(&params->uuid)) {
+@@ -9050,7 +9050,7 @@ out_block:
+ 
+ out:
+     uvm_va_space_up_read(va_space);
+-    uvm_up_read_mmap_sem(&current->mm->mmap_sem);
++    uvm_up_read_mmap_sem(current->mm);
+ 
+     uvm_va_block_context_free(block_context);
+ 
+@@ -9065,7 +9065,7 @@ NV_STATUS uvm8_test_va_block_info(UVM_TE
+ 
+     BUILD_BUG_ON(UVM_TEST_VA_BLOCK_SIZE != UVM_VA_BLOCK_SIZE);
+ 
+-    uvm_down_read_mmap_sem(&current->mm->mmap_sem);
++    uvm_down_read_mmap_sem(current->mm);
+     uvm_va_space_down_read(va_space);
+ 
+     status = uvm_va_block_find(va_space, params->lookup_address, &va_block);
+@@ -9083,7 +9083,7 @@ NV_STATUS uvm8_test_va_block_info(UVM_TE
+ 
+ out:
+     uvm_va_space_up_read(va_space);
+-    uvm_up_read_mmap_sem(&current->mm->mmap_sem);
++    uvm_up_read_mmap_sem(current->mm);
+     return status;
+ }
+ 
+@@ -9097,7 +9097,7 @@ NV_STATUS uvm8_test_va_residency_info(UV
+     uvm_processor_id_t id;
+     size_t page_index;
+ 
+-    uvm_down_read_mmap_sem(&current->mm->mmap_sem);
++    uvm_down_read_mmap_sem(current->mm);
+     uvm_va_space_down_read(va_space);
+ 
+     status = uvm_va_block_find(va_space, params->lookup_address, &block);
+@@ -9153,7 +9153,7 @@ out:
+     if (block)
+         uvm_mutex_unlock(&block->lock);
+     uvm_va_space_up_read(va_space);
+-    uvm_up_read_mmap_sem(&current->mm->mmap_sem);
++    uvm_up_read_mmap_sem(current->mm);
+     return status;
+ }
+ 
+--- a/nvidia-uvm/uvm8_va_range.h
++++ b/nvidia-uvm/uvm8_va_range.h
+@@ -647,7 +647,7 @@ static inline struct vm_area_struct *uvm
+     if (current->mm != vma->vm_mm)
+         return NULL;
+ 
+-    uvm_assert_mmap_sem_locked(&vma->vm_mm->mmap_sem);
++    uvm_assert_mmap_sem_locked(vma->vm_mm);
+     return vma;
+ }
+ 
+--- a/nvidia-uvm/uvm8_va_space.c
++++ b/nvidia-uvm/uvm8_va_space.c
+@@ -514,7 +514,7 @@ NV_STATUS uvm_va_space_unregister_gpu(uv
+ 
+     // The mmap_sem lock is needed to establish CPU mappings to any pages
+     // evicted from the GPU if accessed by CPU is set for them.
+-    uvm_down_read_mmap_sem(&current->mm->mmap_sem);
++    uvm_down_read_mmap_sem(current->mm);
+ 
+     uvm_va_space_down_write(va_space);
+ 
+@@ -527,7 +527,7 @@ NV_STATUS uvm_va_space_unregister_gpu(uv
+     uvm_processor_mask_clear(&va_space->gpu_register_in_progress, gpu->id);
+ 
+     uvm_va_space_up_write(va_space);
+-    uvm_up_read_mmap_sem(&current->mm->mmap_sem);
++    uvm_up_read_mmap_sem(current->mm);
+ 
+     // Drop the count we took above
+     uvm_gpu_release(gpu);
+@@ -952,7 +952,7 @@ NV_STATUS uvm_va_space_register_gpu_va_s
+         return status;
+     }
+ 
+-    uvm_down_read_mmap_sem(&current->mm->mmap_sem);
++    uvm_down_read_mmap_sem(current->mm);
+     uvm_va_space_down_write(va_space);
+ 
+     if (!uvm_processor_mask_test(&va_space->registered_gpus, gpu->id)) {
+@@ -991,7 +991,7 @@ NV_STATUS uvm_va_space_register_gpu_va_s
+     }
+ 
+     uvm_va_space_up_write(va_space);
+-    uvm_up_read_mmap_sem(&current->mm->mmap_sem);
++    uvm_up_read_mmap_sem(current->mm);
+     uvm_gpu_release(gpu);
+     return NV_OK;
+ 
+@@ -1007,7 +1007,7 @@ error:
+     }
+ 
+     uvm_va_space_up_write(va_space);
+-    uvm_up_read_mmap_sem(&current->mm->mmap_sem);
++    uvm_up_read_mmap_sem(current->mm);
+ 
+     destroy_gpu_va_space(gpu_va_space);
+     uvm_gpu_release(gpu);
+@@ -1079,7 +1079,7 @@ NV_STATUS uvm_va_space_unregister_gpu_va
+     uvm_gpu_retain(gpu);
+     uvm_va_space_up_read_rm(va_space);
+ 
+-    uvm_down_read_mmap_sem(&current->mm->mmap_sem);
++    uvm_down_read_mmap_sem(current->mm);
+     uvm_va_space_down_write(va_space);
+ 
+     // We dropped the lock so we have to re-verify that this gpu_va_space is
+@@ -1098,7 +1098,7 @@ NV_STATUS uvm_va_space_unregister_gpu_va
+ 
+ done:
+     uvm_va_space_up_write(va_space);
+-    uvm_up_read_mmap_sem(&current->mm->mmap_sem);
++    uvm_up_read_mmap_sem(current->mm);
+     uvm_deferred_free_object_list(&deferred_free_list);
+     uvm_gpu_va_space_release(gpu_va_space);
+     uvm_gpu_release(gpu);

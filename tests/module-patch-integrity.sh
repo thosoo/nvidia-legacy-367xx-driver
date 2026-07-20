@@ -49,6 +49,8 @@ backport-dma-mask-api.patch
 backport-procfs-api-compat.patch
 normalize-module-instances-warning.patch
 backport-timekeeping-scheduler-mmap-lock-api.patch
+backport-uvm-mmap-lock-api.patch
+backport-uvm-core-api-compat.patch
 '
     while IFS= read -r patch_name; do
         test -n "$patch_name" || continue
@@ -63,12 +65,12 @@ backport-timekeeping-scheduler-mmap-lock-api.patch
             apply_patch_checked "$patch_name"
         fi
         find "$work/tree" \( -name '*.rej' -o -name '*.orig' \) -delete
-        if [ "${last_applied:-}" = backport-timekeeping-scheduler-mmap-lock-api.patch ]; then
+        if [ "${last_applied:-}" = backport-uvm-core-api-compat.patch ]; then
             break
         fi
     done < "$series"
-    if [ "${last_applied:-}" != backport-timekeeping-scheduler-mmap-lock-api.patch ]; then
-        echo 'focused PR5 series did not reach backport-timekeeping-scheduler-mmap-lock-api.patch' >&2
+    if [ "${last_applied:-}" != backport-uvm-core-api-compat.patch ]; then
+        echo 'focused PR5 series did not reach backport-uvm-core-api-compat.patch' >&2
         exit 1
     fi
 else

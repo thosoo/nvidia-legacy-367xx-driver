@@ -1,0 +1,121 @@
+--- a/common/inc/nv.h
++++ b/common/inc/nv.h
+@@ -13,6 +13,8 @@
+ #define _NV_H_
+ 
+ #include <nvtypes.h>
++#include "nvstatus.h"
++#include "nv-misc.h"
+ #include <nvCpuUuid.h>
+ #include "nv_stdarg.h"
+ 
+--- a/conftest.sh
++++ b/conftest.sh
+@@ -1903,6 +1903,16 @@ compile_test() {
+             compile_check_conftest "$CODE" "NV_MMAP_ASSERT_WRITE_LOCKED_PRESENT" "" "types"
+         ;;
+ 
++        smp_read_barrier_depends)
++            CODE="
++            #include <asm/barrier.h>
++            void conftest_smp_read_barrier_depends(void)
++            {
++                smp_read_barrier_depends();
++            }"
++            compile_check_conftest "$CODE" "NV_SMP_READ_BARRIER_DEPENDS_PRESENT" "" "types"
++        ;;
++
+         get_num_physpages)
+             #
+             # Determine if the get_num_physpages() function is
+--- a/nvidia-uvm/nvidia-uvm.Kbuild
++++ b/nvidia-uvm/nvidia-uvm.Kbuild
+@@ -124,6 +124,7 @@ NV_CONFTEST_FUNCTION_COMPILE_TESTS += mm
+ NV_CONFTEST_FUNCTION_COMPILE_TESTS += mm_has_mmap_sem
+ NV_CONFTEST_FUNCTION_COMPILE_TESTS += mmap_assert_locked
+ NV_CONFTEST_FUNCTION_COMPILE_TESTS += mmap_assert_write_locked
++NV_CONFTEST_FUNCTION_COMPILE_TESTS += smp_read_barrier_depends
+ NV_CONFTEST_FUNCTION_COMPILE_TESTS += bitmap_clear
+ NV_CONFTEST_FUNCTION_COMPILE_TESTS += usleep_range
+ NV_CONFTEST_FUNCTION_COMPILE_TESTS += radix_tree_empty
+--- a/nvidia-uvm/uvm8.c
++++ b/nvidia-uvm/uvm8.c
+@@ -99,14 +99,14 @@ static void uvm_destroy_vma_semaphore_po
+ // If a fault handler is not set, paths like handle_pte_fault in older kernels
+ // assume the memory is anonymous. That would make debugging this failure harder
+ // so we force it to fail instead.
+-static int uvm_vm_fault_sigbus(struct vm_area_struct *vma, struct vm_fault *vmf)
++static vm_fault_t uvm_vm_fault_sigbus(struct vm_area_struct *vma, struct vm_fault *vmf)
+ {
+     UVM_DBG_PRINT_RL("Fault to address 0x%lx in disabled vma\n", nv_page_fault_va(vmf));
+     vmf->page = NULL;
+     return VM_FAULT_SIGBUS;
+ }
+ 
+-static int uvm_vm_fault_sigbus_wrapper(struct vm_fault *vmf)
++static vm_fault_t uvm_vm_fault_sigbus_wrapper(struct vm_fault *vmf)
+ {
+ #if defined(NV_VM_OPS_FAULT_REMOVED_VMA_ARG)
+     return uvm_vm_fault_sigbus(vmf->vma, vmf);
+@@ -324,7 +324,7 @@ static void uvm_vm_close_managed(struct
+         uvm_record_unlock_mmap_sem_write(current->mm);
+ }
+ 
+-static int uvm_vm_fault(struct vm_area_struct *vma, struct vm_fault *vmf)
++static vm_fault_t uvm_vm_fault(struct vm_area_struct *vma, struct vm_fault *vmf)
+ {
+     uvm_va_space_t *va_space = uvm_va_space_get(vma->vm_file);
+     uvm_va_block_t *va_block;
+@@ -423,7 +423,7 @@ convert_error:
+     }
+ }
+ 
+-static int uvm_vm_fault_wrapper(struct vm_fault *vmf)
++static vm_fault_t uvm_vm_fault_wrapper(struct vm_fault *vmf)
+ {
+ #if defined(NV_VM_OPS_FAULT_REMOVED_VMA_ARG)
+     return uvm_vm_fault(vmf->vma, vmf);
+--- a/nvidia-uvm/uvm8_tools.c
++++ b/nvidia-uvm/uvm8_tools.c
+@@ -157,7 +157,7 @@ static uvm_tools_event_tracker_t *tools_
+ {
+     long event_tracker = atomic_long_read((atomic_long_t *)&filp->private_data);
+ 
+-    smp_read_barrier_depends();
++    uvm_read_dependency_barrier();
+     return (uvm_tools_event_tracker_t *)event_tracker;
+ }
+ 
+--- a/nvidia-uvm/uvm8_va_range.h
++++ b/nvidia-uvm/uvm8_va_range.h
+@@ -703,7 +703,7 @@ static uvm_va_block_t *uvm_va_range_bloc
+     // make sure that any initialization of this block by the creating thread is
+     // visible to later accesses in this thread, which requires a data
+     // dependency barrier.
+-    smp_read_barrier_depends();
++    uvm_read_dependency_barrier();
+     return block;
+ }
+ 
+--- a/nvidia-uvm/uvm_linux.h
++++ b/nvidia-uvm/uvm_linux.h
+@@ -49,6 +49,19 @@
+ #include <linux/rbtree.h>
+ #include <asm/current.h>
+ 
++static inline void uvm_read_dependency_barrier(void)
++{
++#if defined(NV_SMP_READ_BARRIER_DEPENDS_PRESENT)
++    smp_read_barrier_depends();
++#else
++    /*
++     * Linux removed smp_read_barrier_depends() after making dependency
++     * ordering implicit on supported architectures. This 367xx package is
++     * amd64-only, and the protected loads use atomic_long_read().
++     */
++#endif
++}
++
+ #include <linux/random.h>           /* get_random_bytes()               */
+ #include <linux/radix-tree.h>       /* Linux kernel radix tree          */
+ 

@@ -162,12 +162,17 @@ run_repository_test procfs-api-compat tests/procfs-api-compat.sh
 run_repository_test timekeeping-api-compat tests/timekeeping-api-compat.sh
 run_repository_test scheduler-state-api tests/scheduler-state-api.sh
 run_repository_test mmap-lock-api tests/mmap-lock-api.sh
+run_repository_test uvm-mmap-lock-api tests/uvm-mmap-lock-api.sh
+run_repository_test uvm-vm-fault-api tests/uvm-vm-fault-api.sh
+run_repository_test uvm-dependency-barrier tests/uvm-dependency-barrier.sh
+run_repository_test uvm-interface-header-order tests/uvm-interface-header-order.sh
 
 set_stage module-series-integrity
 module_integrity_tree=$(tools/prepare-kernel-tree.sh "$suite" /work/module-series-integrity)
 printf '%s\n' "$module_integrity_tree" > /work/logs/module-series-integrity-tree.txt
 run_repository_test module-patch-integrity-pr5 tests/module-patch-integrity.sh "$module_integrity_tree"
 run_repository_test module-patch-integrity-full tests/module-patch-integrity.sh --full-series "$module_integrity_tree"
+run_repository_test patch-series-position tests/patch-series-position.sh "$module_integrity_tree"
 
 set_stage source-build
 set +e
