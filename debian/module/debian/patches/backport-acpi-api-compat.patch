@@ -5,8 +5,8 @@ Origin: backport, NVIDIA ACPI handle-based compatibility adapted to 367.134
 Forwarded: not-needed
 Last-Update: 2026-07-20
 
---- a/conftest.sh	2026-07-20 09:37:00.350276989 +0000
-+++ b/conftest.sh	2026-07-20 09:37:00.406276738 +0000
+--- a/conftest.sh	2026-07-20 11:32:10.995436288 +0000
++++ b/conftest.sh	2026-07-20 11:32:11.035435975 +0000
 @@ -3034,6 +3034,22 @@
              compile_check_conftest "$CODE" "NV_IS_SWIOTLB_ACTIVE_PRESENT" "" "functions"
          ;;
@@ -30,8 +30,8 @@ Last-Update: 2026-07-20
          # When adding a new conftest entry, please use the correct format for
          # specifying the relevant upstream Linux kernel commit.
          #
---- a/nvidia/nvidia.Kbuild	2026-07-20 09:37:00.342277024 +0000
-+++ b/nvidia/nvidia.Kbuild	2026-07-20 09:37:00.406276738 +0000
+--- a/nvidia/nvidia.Kbuild	2026-07-20 11:32:10.987436351 +0000
++++ b/nvidia/nvidia.Kbuild	2026-07-20 11:32:11.035435975 +0000
 @@ -118,6 +118,7 @@
  NV_CONFTEST_FUNCTION_COMPILE_TESTS += ioremap_cache
  NV_CONFTEST_FUNCTION_COMPILE_TESTS += ioremap_wc
@@ -41,7 +41,7 @@ Last-Update: 2026-07-20
  NV_CONFTEST_FUNCTION_COMPILE_TESTS += pci_dma_mapping_error
  NV_CONFTEST_FUNCTION_COMPILE_TESTS += sg_alloc_table
 --- a/nvidia/nv-acpi.c	2019-12-17 13:33:51.000000000 +0000
-+++ b/nvidia/nv-acpi.c	2026-07-20 09:37:00.406276738 +0000
++++ b/nvidia/nv-acpi.c	2026-07-20 11:32:11.731430515 +0000
 @@ -60,6 +60,7 @@
  static acpi_handle wmmx_handle = NULL;
  static acpi_handle mxmi_handle = NULL;
@@ -163,7 +163,7 @@ Last-Update: 2026-07-20
 +    child_data.count = 0;
 +    child_data.lcd_dev_handle = NULL;
 +    NV_ACPI_WALK_NAMESPACE(ACPI_TYPE_DEVICE, device->handle, 1,
-+                           nv_acpi_add_one_child_handle, NULL, &child_data, NULL);
++                           nv_acpi_add_one_child_handle, &child_data, NULL);
 +#endif
  
      // arg 0, bits 1:0, 0 = enable events
@@ -339,7 +339,7 @@ Last-Update: 2026-07-20
 +    child_data.count = 0;
 +    child_data.lcd_dev_handle = NULL;
 +    NV_ACPI_WALK_NAMESPACE(ACPI_TYPE_DEVICE, dev_handle, 1,
-+                           nv_acpi_find_lcd_child_handle, NULL, &child_data, NULL);
++                           nv_acpi_find_lcd_child_handle, &child_data, NULL);
 +    lcd_dev_handle = child_data.lcd_dev_handle;
 +#endif
  
