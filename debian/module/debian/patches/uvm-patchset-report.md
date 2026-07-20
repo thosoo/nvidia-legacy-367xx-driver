@@ -43,3 +43,9 @@ Notes:
 - Both patches were created and refreshed in a prepared 367.134 source tree with Quilt at their real active-series positions.
 - Patch headers use Quilt `-p ab` output (`--- a/path`, `+++ b/path`) with no `diff -Naur` banner and no temporary build-tree paths.
 - The full-series Quilt run still records inherited fuzz/offsets in older historical patches, but the two UVM patches apply cleanly with `--fuzz=0` at their exact positions.
+
+## dependency-barrier strict probe refresh
+
+- Refreshed only `backport-uvm-core-api-compat.patch` through Quilt at its exact series position after `backport-uvm-mmap-lock-api.patch`.
+- The refreshed probe removes stale-object false positives by deleting `conftest$$.o`, compiling with strict implicit-declaration, incompatible-pointer, and return-type diagnostics, and defining `NV_SMP_READ_BARRIER_DEPENDS_PRESENT` only when the compiler exits `0` and creates a new object.
+- The expected Bookworm/Trixie selected implementation is `implicit dependency ordering` with `#undef NV_SMP_READ_BARRIER_DEPENDS_PRESENT`.
