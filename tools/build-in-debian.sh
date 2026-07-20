@@ -159,6 +159,9 @@ run_repository_test sg-allocation-conftest tests/sg-allocation-conftest.sh
 run_repository_test acpi-api-compat tests/acpi-api-compat.sh
 run_repository_test dma-mask-api tests/dma-mask-api.sh
 run_repository_test procfs-api-compat tests/procfs-api-compat.sh
+run_repository_test timekeeping-api-compat tests/timekeeping-api-compat.sh
+run_repository_test scheduler-state-api tests/scheduler-state-api.sh
+run_repository_test mmap-lock-api tests/mmap-lock-api.sh
 
 set_stage module-series-integrity
 module_integrity_tree=$(tools/prepare-kernel-tree.sh "$suite" /work/module-series-integrity)
