@@ -38,29 +38,39 @@ apply_patch_checked()
 }
 
 if [ "$mode" = pr5 ]; then
-    pre=$work/pre-series
-    sed '/backport-vmalloc-signature.patch/,$d' "$series" > "$pre"
+    pr5_patches='
+backport-vmalloc-signature.patch
+backport-ioremap-nocache.patch
+backport-smp-call-return-types.patch
+backport-swiotlb-detection.patch
+fix-sg-allocation-conftests.patch
+backport-acpi-api-compat.patch
+backport-dma-mask-api.patch
+backport-procfs-api-compat.patch
+normalize-module-instances-warning.patch
+backport-timekeeping-scheduler-mmap-lock-api.patch
+'
     while IFS= read -r patch_name; do
-        apply_patch_checked "$patch_name" --fuzz=0 >/dev/null
-    done < "$pre"
-    find "$work/tree" \( -name '*.rej' -o -name '*.orig' \) -delete
-    for patch_name in \
-        backport-vmalloc-signature.patch \
-        backport-ioremap-nocache.patch \
-        backport-smp-call-return-types.patch \
-        backport-swiotlb-detection.patch \
-        fix-sg-allocation-conftests.patch \
-        backport-acpi-api-compat.patch \
-        backport-dma-mask-api.patch \
-        backport-procfs-api-compat.patch \
-        normalize-module-instances-warning.patch
-    do
-        apply_patch_checked "$patch_name" --fuzz=0
-        if grep -E 'fuzz|offset|FAILED|malformed' "$work/$patch_name.log" >/dev/null; then
-            cat "$work/$patch_name.log" >&2
-            exit 1
+        test -n "$patch_name" || continue
+        if printf '%s\n' "$pr5_patches" | grep -Fx "$patch_name" >/dev/null; then
+            apply_patch_checked "$patch_name" --fuzz=0
+            if grep -E 'fuzz|offset|FAILED|malformed' "$work/$patch_name.log" >/dev/null; then
+                cat "$work/$patch_name.log" >&2
+                exit 1
+            fi
+            last_applied=$patch_name
+        else
+            apply_patch_checked "$patch_name"
         fi
-    done
+        find "$work/tree" \( -name '*.rej' -o -name '*.orig' \) -delete
+        if [ "${last_applied:-}" = backport-timekeeping-scheduler-mmap-lock-api.patch ]; then
+            break
+        fi
+    done < "$series"
+    if [ "${last_applied:-}" != backport-timekeeping-scheduler-mmap-lock-api.patch ]; then
+        echo 'focused PR5 series did not reach backport-timekeeping-scheduler-mmap-lock-api.patch' >&2
+        exit 1
+    fi
 else
     : > "$work/full-series-results.tsv"
     while IFS= read -r patch_name; do

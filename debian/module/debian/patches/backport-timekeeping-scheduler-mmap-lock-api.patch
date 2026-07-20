@@ -3,12 +3,13 @@ Description: Backport timekeeping, task-state, and mmap read-lock APIs
  module code, made task_struct::state private, and renamed mmap_sem to the
  mmap read-lock helper API. Add feature-probed 367.134 compatibility wrappers
  preserving wall-clock microsecond semantics, public scheduler state updates,
- and local/remote GUP locking semantics.
+ raw-monotonic UVM timing, and local/remote GUP locking semantics.
 Origin: backport, adapted for NVIDIA 367.134 from later NVIDIA/Debian API compatibility patterns
 Forwarded: not-needed
-diff -Naur a/common/inc/nv-linux.h b/common/inc/nv-linux.h
---- a/common/inc/nv-linux.h	2026-07-20 17:53:37.371958276 +0000
-+++ b/common/inc/nv-linux.h	2026-07-20 17:53:38.115949241 +0000
+
+diff -Naur -x '*.orig' a/common/inc/nv-linux.h b/common/inc/nv-linux.h
+--- a/common/inc/nv-linux.h	2026-07-20 18:46:09.693167106 +0000
++++ b/common/inc/nv-linux.h	2026-07-20 18:46:10.013166491 +0000
 @@ -194,6 +194,8 @@
  #else
  #include <asm/semaphore.h>
@@ -17,10 +18,10 @@ diff -Naur a/common/inc/nv-linux.h b/common/inc/nv-linux.h
 +#include "nv-mmap-lock-compat.h"
  #include <linux/completion.h>
  #include <linux/highmem.h>
- 
-diff -Naur a/common/inc/nv-mmap-lock-compat.h b/common/inc/nv-mmap-lock-compat.h
+
+diff -Naur -x '*.orig' a/common/inc/nv-mmap-lock-compat.h b/common/inc/nv-mmap-lock-compat.h
 --- a/common/inc/nv-mmap-lock-compat.h	1970-01-01 00:00:00.000000000 +0000
-+++ b/common/inc/nv-mmap-lock-compat.h	2026-07-20 17:53:38.115949241 +0000
++++ b/common/inc/nv-mmap-lock-compat.h	2026-07-20 18:46:10.013166491 +0000
 @@ -0,0 +1,36 @@
 +/* _NVRM_COPYRIGHT_BEGIN_
 + *
@@ -58,10 +59,10 @@ diff -Naur a/common/inc/nv-mmap-lock-compat.h b/common/inc/nv-mmap-lock-compat.h
 +}
 +
 +#endif /* _NV_MMAP_LOCK_COMPAT_H_ */
-diff -Naur a/common/inc/nv-time-compat.h b/common/inc/nv-time-compat.h
+diff -Naur -x '*.orig' a/common/inc/nv-time-compat.h b/common/inc/nv-time-compat.h
 --- a/common/inc/nv-time-compat.h	1970-01-01 00:00:00.000000000 +0000
-+++ b/common/inc/nv-time-compat.h	2026-07-20 17:53:38.115949241 +0000
-@@ -0,0 +1,40 @@
++++ b/common/inc/nv-time-compat.h	2026-07-20 18:46:10.013166491 +0000
+@@ -0,0 +1,41 @@
 +/* _NVRM_COPYRIGHT_BEGIN_
 + *
 + * Copyright 2026 by NVIDIA Corporation.  All rights reserved.
@@ -74,6 +75,7 @@ diff -Naur a/common/inc/nv-time-compat.h b/common/inc/nv-time-compat.h
 +#include "conftest.h"
 +#include "nvtypes.h"
 +#include <linux/time.h>
++#include <linux/ktime.h>
 +#include <linux/timekeeping.h>
 +
 +typedef struct
@@ -102,23 +104,85 @@ diff -Naur a/common/inc/nv-time-compat.h b/common/inc/nv-time-compat.h
 +}
 +
 +#endif /* _NV_TIME_COMPAT_H_ */
-diff -Naur a/conftest.sh b/conftest.sh
---- a/conftest.sh	2026-07-20 17:53:37.479956965 +0000
-+++ b/conftest.sh	2026-07-20 17:53:38.119949194 +0000
-@@ -1759,6 +1759,52 @@
+diff -Naur -x '*.orig' a/conftest.sh b/conftest.sh
+--- a/conftest.sh	2026-07-20 18:46:09.953166607 +0000
++++ b/conftest.sh	2026-07-20 18:46:10.013166491 +0000
+@@ -314,6 +314,60 @@
+     rm -f "$SRC"
+ }
+
++timekeeping_compile_check_conftest() {
++    CODE="$1"
++    DEF="$2"
++    VAL="$3"
++    CAT="$4"
++    NAME=$(printf '%s' "$DEF" | tr 'A-Z' 'a-z')
++    DIAGDIR=conftest-timekeeping-diagnostics
++    SRC=conftest$$.c
++    OBJ=conftest$$.o
++    mkdir -p "$DIAGDIR"
++    rm -f "$OBJ"
++    echo "$CONFTEST_PREAMBLE
++    $CODE" > "$SRC"
++    printf '%s
++' "$CC" > "$DIAGDIR/$NAME.compiler.txt"
++    pwd > "$DIAGDIR/$NAME.cwd.txt"
++    cp "$SRC" "$DIAGDIR/$NAME.source.c"
++    printf '%s
++' "$CC $CFLAGS -Werror=implicit-function-declaration -Werror=incompatible-pointer-types -Werror=return-type -c $SRC" > "$DIAGDIR/$NAME.command.txt"
++    set +e
++    $CC $CFLAGS -Werror=implicit-function-declaration -Werror=incompatible-pointer-types -Werror=return-type -c "$SRC" > "$DIAGDIR/$NAME.stdout.txt" 2> "$DIAGDIR/$NAME.stderr.txt"
++    STATUS=$?
++    set -e
++    printf '%s
++' "$STATUS" > "$DIAGDIR/$NAME.exit.txt"
++    if [ -f "$OBJ" ]; then
++        echo yes > "$DIAGDIR/$NAME.object-created.txt"
++        rm -f "$OBJ"
++        echo "#define ${DEF} ${VAL}" | append_conftest "${CAT}"
++        echo "#define ${DEF} ${VAL}" > "$DIAGDIR/$NAME.definition.txt"
++        case "$DEF" in
++            NV_KTIME_GET_REAL_TS64_PRESENT)
++                echo "ktime_get_real_ts64" > "$DIAGDIR/selected-realtime-api.txt"
++            ;;
++            NV_DO_GETTIMEOFDAY_PRESENT)
++                test -f "$DIAGDIR/selected-realtime-api.txt" || \
++                    echo "do_gettimeofday" > "$DIAGDIR/selected-realtime-api.txt"
++            ;;
++            NV_KTIME_GET_RAW_TS64_PRESENT)
++                echo "ktime_get_raw_ts64" > "$DIAGDIR/selected-raw-monotonic-api.txt"
++            ;;
++            NV_GETRAWMONOTONIC_PRESENT)
++                test -f "$DIAGDIR/selected-raw-monotonic-api.txt" || \
++                    echo "getrawmonotonic" > "$DIAGDIR/selected-raw-monotonic-api.txt"
++            ;;
++        esac
++    else
++        echo no > "$DIAGDIR/$NAME.object-created.txt"
++        echo "#undef ${DEF}" | append_conftest "${CAT}"
++        echo "#undef ${DEF}" > "$DIAGDIR/$NAME.definition.txt"
++    fi
++    rm -f "$SRC"
++}
++
+ export_symbol_present_conftest() {
+     #
+     # Check Module.symvers to see whether the given symbol is present.
+@@ -1759,6 +1813,76 @@
              procfs_compile_check_conftest "$CODE" "NV_PDE_STRUCT_ACCESS_PRESENT" "" "types"
          ;;
- 
+
 +
 +        ktime_get_real_ts64)
 +            CODE="
++            #include <linux/ktime.h>
 +            #include <linux/timekeeping.h>
 +            void conftest_ktime_get_real_ts64(void)
 +            {
 +                struct timespec64 ts;
 +                ktime_get_real_ts64(&ts);
 +            }"
-+            compile_check_conftest "$CODE" "NV_KTIME_GET_REAL_TS64_PRESENT" "" "types"
++            timekeeping_compile_check_conftest "$CODE" "NV_KTIME_GET_REAL_TS64_PRESENT" "" "types"
 +        ;;
 +
 +        do_gettimeofday)
@@ -129,7 +193,30 @@ diff -Naur a/conftest.sh b/conftest.sh
 +                struct timeval tv;
 +                do_gettimeofday(&tv);
 +            }"
-+            compile_check_conftest "$CODE" "NV_DO_GETTIMEOFDAY_PRESENT" "" "types"
++            timekeeping_compile_check_conftest "$CODE" "NV_DO_GETTIMEOFDAY_PRESENT" "" "types"
++        ;;
++
++        ktime_get_raw_ts64)
++            CODE="
++            #include <linux/ktime.h>
++            #include <linux/timekeeping.h>
++            void conftest_ktime_get_raw_ts64(void)
++            {
++                struct timespec64 ts;
++                ktime_get_raw_ts64(&ts);
++            }"
++            timekeeping_compile_check_conftest "$CODE" "NV_KTIME_GET_RAW_TS64_PRESENT" "" "types"
++        ;;
++
++        getrawmonotonic)
++            CODE="
++            #include <linux/time.h>
++            void conftest_getrawmonotonic(void)
++            {
++                struct timespec ts;
++                getrawmonotonic(&ts);
++            }"
++            timekeeping_compile_check_conftest "$CODE" "NV_GETRAWMONOTONIC_PRESENT" "" "types"
 +        ;;
 +
 +        mmap_read_lock)
@@ -158,33 +245,35 @@ diff -Naur a/conftest.sh b/conftest.sh
          get_num_physpages)
              #
              # Determine if the get_num_physpages() function is
-diff -Naur a/nvidia/nvidia.Kbuild b/nvidia/nvidia.Kbuild
---- a/nvidia/nvidia.Kbuild	2026-07-20 17:53:37.515956528 +0000
-+++ b/nvidia/nvidia.Kbuild	2026-07-20 17:53:38.119949194 +0000
-@@ -137,6 +137,10 @@
+diff -Naur -x '*.orig' a/nvidia/nvidia.Kbuild b/nvidia/nvidia.Kbuild
+--- a/nvidia/nvidia.Kbuild	2026-07-20 18:46:09.933166645 +0000
++++ b/nvidia/nvidia.Kbuild	2026-07-20 18:46:10.017166484 +0000
+@@ -135,6 +135,12 @@
  NV_CONFTEST_FUNCTION_COMPILE_TESTS += pde_data_upper_case
  NV_CONFTEST_FUNCTION_COMPILE_TESTS += pde_struct_access
  NV_CONFTEST_FUNCTION_COMPILE_TESTS += proc_remove
 +NV_CONFTEST_FUNCTION_COMPILE_TESTS += ktime_get_real_ts64
 +NV_CONFTEST_FUNCTION_COMPILE_TESTS += do_gettimeofday
++NV_CONFTEST_FUNCTION_COMPILE_TESTS += ktime_get_raw_ts64
++NV_CONFTEST_FUNCTION_COMPILE_TESTS += getrawmonotonic
 +NV_CONFTEST_FUNCTION_COMPILE_TESTS += mmap_read_lock
 +NV_CONFTEST_FUNCTION_COMPILE_TESTS += mm_has_mmap_sem
  NV_CONFTEST_FUNCTION_COMPILE_TESTS += pm_vt_switch_required
  NV_CONFTEST_FUNCTION_COMPILE_TESTS += drm_driver_has_set_busid
  NV_CONFTEST_FUNCTION_COMPILE_TESTS += xen_ioemu_inject_msi
-diff -Naur a/nvidia/nvlink_linux.c b/nvidia/nvlink_linux.c
+diff -Naur -x '*.orig' a/nvidia/nvlink_linux.c b/nvidia/nvlink_linux.c
 --- a/nvidia/nvlink_linux.c	2019-12-17 13:36:12.000000000 +0000
-+++ b/nvidia/nvlink_linux.c	2026-07-20 17:53:38.123949145 +0000
++++ b/nvidia/nvlink_linux.c	2026-07-20 18:46:10.017166484 +0000
 @@ -22,6 +22,7 @@
  *******************************************************************************/
- 
+
  #include "conftest.h"
 +#include "nv-time-compat.h"
- 
+
  #include <linux/module.h>
  #include <linux/major.h>
 @@ -267,8 +268,8 @@
- 
+
  static NvBool nv_timer_less_than
  (
 -    const struct timeval *a,
@@ -195,7 +284,7 @@ diff -Naur a/nvidia/nvlink_linux.c b/nvidia/nvlink_linux.c
  {
      return (a->tv_sec == b->tv_sec) ? (a->tv_usec < b->tv_usec) 
 @@ -277,9 +278,9 @@
- 
+
  static void nv_timeradd
  (
 -    const struct timeval    *a,
@@ -208,7 +297,7 @@ diff -Naur a/nvidia/nvlink_linux.c b/nvidia/nvlink_linux.c
  {
      result->tv_sec = a->tv_sec + b->tv_sec;
 @@ -293,9 +294,9 @@
- 
+
  static void nv_timersub
  (
 -    const struct timeval    *a,
@@ -226,10 +315,10 @@ diff -Naur a/nvidia/nvlink_linux.c b/nvidia/nvlink_linux.c
      unsigned long mdelay_safe_msec;
 -    struct timeval tm_end, tm_aux;
 +    nv_timeval_t tm_end, tm_aux;
- 
+
 -    do_gettimeofday(&tm_aux);
 +    nv_gettimeofday(&tm_aux);
- 
+
      if (in_irq() && (ms > NV_MAX_ISR_DELAY_MS))
      {
 @@ -346,11 +347,11 @@
@@ -246,36 +335,36 @@ diff -Naur a/nvidia/nvlink_linux.c b/nvidia/nvlink_linux.c
              if (nv_timer_less_than(&tm_aux, &tm_end))
              {
                  nv_timersub(&tm_end, &tm_aux, &tm_aux);
-diff -Naur a/nvidia/os-interface.c b/nvidia/os-interface.c
+diff -Naur -x '*.orig' a/nvidia/os-interface.c b/nvidia/os-interface.c
 --- a/nvidia/os-interface.c	2019-12-17 13:33:51.000000000 +0000
-+++ b/nvidia/os-interface.c	2026-07-20 17:53:38.119949194 +0000
++++ b/nvidia/os-interface.c	2026-07-20 18:46:10.017166484 +0000
 @@ -445,9 +445,9 @@
      NvU32 *useconds
  )
  {
 -    struct timeval tm;
 +    nv_timeval_t tm;
- 
+
 -    do_gettimeofday(&tm);
 +    nv_gettimeofday(&tm);
- 
+
      *seconds = tm.tv_sec;
      *useconds = tm.tv_usec;
 @@ -480,9 +480,9 @@
      unsigned long usec;
- 
+
  #ifdef NV_CHECK_DELAY_ACCURACY
 -    struct timeval tm1, tm2;
 +    nv_timeval_t tm1, tm2;
- 
+
 -    do_gettimeofday(&tm1);
 +    nv_gettimeofday(&tm1);
  #endif
- 
+
      if (in_irq() && (MicroSeconds > NV_MAX_ISR_DELAY_US))
 @@ -497,7 +497,7 @@
          udelay(usec);
- 
+
  #ifdef NV_CHECK_DELAY_ACCURACY
 -    do_gettimeofday(&tm2);
 +    nv_gettimeofday(&tm2);
@@ -292,7 +381,7 @@ diff -Naur a/nvidia/os-interface.c b/nvidia/os-interface.c
 -    struct timeval tm_start;
 +    nv_timeval_t tm_start;
  #endif
- 
+
 -    do_gettimeofday(&tm_aux);
 +    nv_gettimeofday(&tm_aux);
  #ifdef NV_CHECK_DELAY_ACCURACY
@@ -321,31 +410,31 @@ diff -Naur a/nvidia/os-interface.c b/nvidia/os-interface.c
      timersub(&tm_aux, &tm_start, &tm_aux);
      nv_printf(NV_DBG_ERRORS, "NVRM: osDelay %dmsec: %d.%06dsec\n",
          MilliSeconds, tm_aux.tv_sec, tm_aux.tv_usec);
-diff -Naur a/nvidia/os-mlock.c b/nvidia/os-mlock.c
---- a/nvidia/os-mlock.c	2026-07-20 17:53:37.327958810 +0000
-+++ b/nvidia/os-mlock.c	2026-07-20 17:53:38.123949145 +0000
+diff -Naur -x '*.orig' a/nvidia/os-mlock.c b/nvidia/os-mlock.c
+--- a/nvidia/os-mlock.c	2026-07-20 18:46:09.573167336 +0000
++++ b/nvidia/os-mlock.c	2026-07-20 18:46:10.017166484 +0000
 @@ -44,7 +44,7 @@
          return rmStatus;
      }
- 
+
 -    down_read(&mm->mmap_sem);
 +    nv_mmap_read_lock(mm);
- 
+
      vma = find_vma(mm, (NvUPtr)address);
      if ((vma == NULL) || ((vma->vm_flags & (VM_IO | VM_PFNMAP)) == 0))
 @@ -77,7 +77,7 @@
      }
- 
+
  done:
 -    up_read(&mm->mmap_sem);
 +    nv_mmap_read_unlock(mm);
- 
+
      return rmStatus;
  #else
 @@ -115,10 +115,10 @@
          return rmStatus;
      }
- 
+
 -    down_read(&mm->mmap_sem);
 +    nv_mmap_read_lock(mm);
      ret = NV_GET_USER_PAGES((unsigned long)address,
@@ -353,119 +442,153 @@ diff -Naur a/nvidia/os-mlock.c b/nvidia/os-mlock.c
 -    up_read(&mm->mmap_sem);
 +    nv_mmap_read_unlock(mm);
      pinned = ret;
- 
+
      if (ret < 0)
-diff -Naur a/nvidia-drm/nvidia-drm-linux.c b/nvidia-drm/nvidia-drm-linux.c
---- a/nvidia-drm/nvidia-drm-linux.c	2026-07-20 17:53:37.327958810 +0000
-+++ b/nvidia-drm/nvidia-drm-linux.c	2026-07-20 17:53:38.123949145 +0000
+diff -Naur -x '*.orig' a/nvidia-drm/nvidia-drm-linux.c b/nvidia-drm/nvidia-drm-linux.c
+--- a/nvidia-drm/nvidia-drm-linux.c	2026-07-20 18:46:09.573167336 +0000
++++ b/nvidia-drm/nvidia-drm-linux.c	2026-07-20 18:46:10.017166484 +0000
 @@ -28,6 +28,8 @@
  #include "nvidia-drm.h"
- 
+
  #include "conftest.h"
 +#include "nv-time-compat.h"
 +#include "nv-mmap-lock-compat.h"
- 
+
  #if defined(NV_DRM_AVAILABLE)
- 
+
 @@ -110,11 +112,11 @@
          return -ENOMEM;
      }
- 
+
 -    down_read(&mm->mmap_sem);
 +    nv_mmap_read_lock(mm);
- 
+
      pages_pinned = NV_GET_USER_PAGES(address, pages_count, FOLL_WRITE,
                                       user_pages, NULL);
 -    up_read(&mm->mmap_sem);
 +    nv_mmap_read_unlock(mm);
- 
+
      if (pages_pinned < 0 || (unsigned)pages_pinned < pages_count)
      {
 @@ -169,9 +171,9 @@
- 
+
  uint64_t nvidia_drm_get_time_usec(void)
  {
 -    struct timeval tv;
 +    nv_timeval_t tv;
- 
+
 -    do_gettimeofday(&tv);
 +    nv_gettimeofday(&tv);
- 
+
      return (((uint64_t)tv.tv_sec) * 1000000) + tv.tv_usec;
  }
-diff -Naur a/nvidia-drm/nvidia-drm.Kbuild b/nvidia-drm/nvidia-drm.Kbuild
---- a/nvidia-drm/nvidia-drm.Kbuild	2026-07-20 17:53:37.479956965 +0000
-+++ b/nvidia-drm/nvidia-drm.Kbuild	2026-07-20 17:53:38.119949194 +0000
-@@ -77,3 +77,7 @@
+diff -Naur -x '*.orig' a/nvidia-drm/nvidia-drm.Kbuild b/nvidia-drm/nvidia-drm.Kbuild
+--- a/nvidia-drm/nvidia-drm.Kbuild	2026-07-20 18:46:09.953166607 +0000
++++ b/nvidia-drm/nvidia-drm.Kbuild	2026-07-20 18:46:10.017166484 +0000
+@@ -77,3 +77,9 @@
  NV_CONFTEST_TYPE_COMPILE_TESTS += file_operations_fop_unsigned_offset_present
  NV_CONFTEST_TYPE_COMPILE_TESTS += drm_driver_has_date
  NV_CONFTEST_TYPE_COMPILE_TESTS += drm_connector_helper_funcs_mode_valid_has_const_mode_arg
 +NV_CONFTEST_FUNCTION_COMPILE_TESTS += ktime_get_real_ts64
 +NV_CONFTEST_FUNCTION_COMPILE_TESTS += do_gettimeofday
++NV_CONFTEST_FUNCTION_COMPILE_TESTS += ktime_get_raw_ts64
++NV_CONFTEST_FUNCTION_COMPILE_TESTS += getrawmonotonic
 +NV_CONFTEST_FUNCTION_COMPILE_TESTS += mmap_read_lock
 +NV_CONFTEST_FUNCTION_COMPILE_TESTS += mm_has_mmap_sem
-diff -Naur a/nvidia-modeset/nvidia-modeset-linux.c b/nvidia-modeset/nvidia-modeset-linux.c
---- a/nvidia-modeset/nvidia-modeset-linux.c	2026-07-20 17:53:37.463957159 +0000
-+++ b/nvidia-modeset/nvidia-modeset-linux.c	2026-07-20 17:53:38.123949145 +0000
+diff -Naur -x '*.orig' a/nvidia-modeset/nvidia-modeset-linux.c b/nvidia-modeset/nvidia-modeset-linux.c
+--- a/nvidia-modeset/nvidia-modeset-linux.c	2026-07-20 18:46:09.929166653 +0000
++++ b/nvidia-modeset/nvidia-modeset-linux.c	2026-07-20 18:46:10.017166484 +0000
 @@ -33,6 +33,7 @@
  #include "nvkms-ioctl.h"
- 
+
  #include "conftest.h"
 +#include "nv-time-compat.h"
  #include "nv-timer.h"
  #include "nv-procfs.h"
- 
+
 @@ -198,9 +199,9 @@
- 
+
  NvU64 NVKMS_API_CALL nvkms_get_usec(void)
  {
 -    struct timeval tv;
 +    nv_timeval_t tv;
- 
+
 -    do_gettimeofday(&tv);
 +    nv_gettimeofday(&tv);
- 
+
      return (((NvU64)tv.tv_sec) * 1000000) + tv.tv_usec;
  }
-diff -Naur a/nvidia-modeset/nvidia-modeset.Kbuild b/nvidia-modeset/nvidia-modeset.Kbuild
---- a/nvidia-modeset/nvidia-modeset.Kbuild	2026-07-20 17:53:37.523956431 +0000
-+++ b/nvidia-modeset/nvidia-modeset.Kbuild	2026-07-20 17:53:38.119949194 +0000
-@@ -89,5 +89,9 @@
+diff -Naur -x '*.orig' a/nvidia-modeset/nvidia-modeset.Kbuild b/nvidia-modeset/nvidia-modeset.Kbuild
+--- a/nvidia-modeset/nvidia-modeset.Kbuild	2026-07-20 18:46:09.929166653 +0000
++++ b/nvidia-modeset/nvidia-modeset.Kbuild	2026-07-20 18:46:10.017166484 +0000
+@@ -87,5 +87,11 @@
  NV_CONFTEST_FUNCTION_COMPILE_TESTS += pde_data_upper_case
  NV_CONFTEST_FUNCTION_COMPILE_TESTS += pde_struct_access
  NV_CONFTEST_FUNCTION_COMPILE_TESTS += proc_remove
 +NV_CONFTEST_FUNCTION_COMPILE_TESTS += ktime_get_real_ts64
 +NV_CONFTEST_FUNCTION_COMPILE_TESTS += do_gettimeofday
++NV_CONFTEST_FUNCTION_COMPILE_TESTS += ktime_get_raw_ts64
++NV_CONFTEST_FUNCTION_COMPILE_TESTS += getrawmonotonic
 +NV_CONFTEST_FUNCTION_COMPILE_TESTS += mmap_read_lock
 +NV_CONFTEST_FUNCTION_COMPILE_TESTS += mm_has_mmap_sem
  NV_CONFTEST_FUNCTION_COMPILE_TESTS += timer_setup
  NV_CONFTEST_SYMBOL_COMPILE_TESTS += is_export_symbol_present_timer_delete_sync
-diff -Naur a/nvidia-uvm/nvidia-uvm.Kbuild b/nvidia-uvm/nvidia-uvm.Kbuild
---- a/nvidia-uvm/nvidia-uvm.Kbuild	2026-07-20 17:53:37.303959102 +0000
-+++ b/nvidia-uvm/nvidia-uvm.Kbuild	2026-07-20 17:53:38.119949194 +0000
-@@ -116,6 +116,10 @@
+diff -Naur -x '*.orig' a/nvidia-uvm/nvidia-uvm.Kbuild b/nvidia-uvm/nvidia-uvm.Kbuild
+--- a/nvidia-uvm/nvidia-uvm.Kbuild	2026-07-20 18:46:09.525167428 +0000
++++ b/nvidia-uvm/nvidia-uvm.Kbuild	2026-07-20 18:46:10.017166484 +0000
+@@ -116,6 +116,12 @@
  NV_CONFTEST_FUNCTION_COMPILE_TESTS += pde_data_upper_case
  NV_CONFTEST_FUNCTION_COMPILE_TESTS += pde_struct_access
  NV_CONFTEST_FUNCTION_COMPILE_TESTS += proc_remove
 +NV_CONFTEST_FUNCTION_COMPILE_TESTS += ktime_get_real_ts64
 +NV_CONFTEST_FUNCTION_COMPILE_TESTS += do_gettimeofday
++NV_CONFTEST_FUNCTION_COMPILE_TESTS += ktime_get_raw_ts64
++NV_CONFTEST_FUNCTION_COMPILE_TESTS += getrawmonotonic
 +NV_CONFTEST_FUNCTION_COMPILE_TESTS += mmap_read_lock
 +NV_CONFTEST_FUNCTION_COMPILE_TESTS += mm_has_mmap_sem
  NV_CONFTEST_FUNCTION_COMPILE_TESTS += bitmap_clear
  NV_CONFTEST_FUNCTION_COMPILE_TESTS += usleep_range
  NV_CONFTEST_FUNCTION_COMPILE_TESTS += radix_tree_empty
-diff -Naur a/nvidia-uvm/uvm_linux.h b/nvidia-uvm/uvm_linux.h
+diff -Naur -x '*.orig' a/nvidia-uvm/uvm_linux.h b/nvidia-uvm/uvm_linux.h
 --- a/nvidia-uvm/uvm_linux.h	2019-12-17 13:33:46.000000000 +0000
-+++ b/nvidia-uvm/uvm_linux.h	2026-07-20 17:53:38.123949145 +0000
-@@ -341,9 +341,9 @@
-  * available non-GPL symbols. */
++++ b/nvidia-uvm/uvm_linux.h	2026-07-20 18:46:10.017166484 +0000
+@@ -325,29 +325,24 @@
+ }
+ #endif
+
+-#if defined(CLOCK_MONOTONIC_RAW)
+-/* Return a nanosecond-precise value */
  static inline NvU64 NV_GETTIME(void)
  {
++#if defined(NV_KTIME_GET_RAW_TS64_PRESENT)
++    struct timespec64 ts = {0};
++
++    ktime_get_raw_ts64(&ts);
++
++    return (((NvU64)ts.tv_sec) * NSEC_PER_SEC) + ts.tv_nsec;
++#elif defined(NV_GETRAWMONOTONIC_PRESENT)
+     struct timespec ts = {0};
+
+     getrawmonotonic(&ts);
+
+-    /* Wraps around every 583 years */
+-    return (ts.tv_sec * 1000000000ULL + ts.tv_nsec);
+-}
++    return (((NvU64)ts.tv_sec) * NSEC_PER_SEC) + ts.tv_nsec;
+ #else
+-/* We can only return a microsecond-precise value with the
+- * available non-GPL symbols. */
+-static inline NvU64 NV_GETTIME(void)
+-{
 -    struct timeval tv = {0};
-+    nv_timeval_t tv = {0};
- 
+-
 -    do_gettimeofday(&tv);
-+    nv_gettimeofday(&tv);
- 
-     return (tv.tv_sec * 1000000000ULL + tv.tv_usec * 1000ULL);
- }
+-
+-    return (tv.tv_sec * 1000000000ULL + tv.tv_usec * 1000ULL);
+-}
++#error "No supported raw monotonic time API"
+ #endif
++}
+
+ #if !defined(ilog2)
+     static inline int NV_ILOG2_U32(u32 n)

@@ -375,6 +375,16 @@ set +e
     else
         echo "no procfs conftest diagnostics directory" > /work/logs/conftest-procfs-diagnostics-files.txt
     fi
+    if test -d "$module_source/conftest-timekeeping-diagnostics"; then
+        mkdir -p /work/logs/conftest-timekeeping-diagnostics
+        find "$module_source/conftest-timekeeping-diagnostics" -type f \
+            ! -name '*.o' ! -name '*.ko' ! -name '*.cmd' \
+            -exec cp -v {} /work/logs/conftest-timekeeping-diagnostics/ \; \
+            > /work/logs/conftest-timekeeping-diagnostics-files.txt 2>&1 || \
+            echo "copy timekeeping conftest diagnostics failed" >> /work/logs/post-build-diagnostics-failures.txt
+    else
+        echo "no timekeeping conftest diagnostics directory" > /work/logs/conftest-timekeeping-diagnostics-files.txt
+    fi
     if test -e glvnd/nvidia_icd.json && test -e nonglvnd/nvidia_icd.json; then
         sh tests/vulkan-icd-json.sh . > /work/logs/vulkan-icd-json.log 2>&1
         vulkan_icd_status=$?
