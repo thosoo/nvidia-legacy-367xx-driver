@@ -1,45 +1,93 @@
 #!/bin/sh
 set -eu
 repo=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-if [ "$#" -ne 1 ]; then
+mode=pr5
+if [ "$#" -eq 2 ] && [ "$1" = "--full-series" ]; then
+    mode=full
+    pristine=$(readlink -f "$2")
+elif [ "$#" -eq 1 ]; then
+    pristine=$(readlink -f "$1")
+else
     echo "usage: $0 PREPARED_367_KERNEL_TREE" >&2
+    echo "       $0 --full-series PREPARED_367_KERNEL_TREE" >&2
     exit 2
 fi
-pristine=$(readlink -f "$1")
 test -d "$pristine"
 patchdir=$repo/debian/module/debian/patches
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 cp -a "$pristine/." "$work/tree"
-pre=$work/pre-series
+series=$work/active-series
 sed 's/#HAS_UVM#//g' "$patchdir/series.in" |
-    sed '/^[[:space:]]*#/d; /^[[:space:]]*$/d' |
-    sed '/backport-vmalloc-signature.patch/,$d' > "$pre"
-while IFS= read -r patch; do
-    patch -d "$work/tree" -p1 --fuzz=0 < "$patchdir/$patch" >/dev/null
- done < "$pre"
-find "$work/tree" \( -name '*.rej' -o -name '*.orig' \) -delete
-for patch in \
-    backport-vmalloc-signature.patch \
-    backport-ioremap-nocache.patch \
-    backport-smp-call-return-types.patch \
-    backport-swiotlb-detection.patch \
-    fix-sg-allocation-conftests.patch \
-    backport-acpi-api-compat.patch \
-    backport-dma-mask-api.patch \
-    normalize-module-instances-warning.patch
-do
-    log=$work/$patch.log
-    patch -d "$work/tree" -p1 --fuzz=0 < "$patchdir/$patch" > "$log" 2>&1 || {
+    sed '/^[[:space:]]*#/d; /^[[:space:]]*$/d' > "$series"
+
+apply_patch_checked()
+{
+    patch_name=$1
+    fuzz_arg=${2:-}
+    log=$work/$patch_name.log
+    if [ -n "$fuzz_arg" ]; then
+        patch -d "$work/tree" -p1 "$fuzz_arg" < "$patchdir/$patch_name" > "$log" 2>&1
+    else
+        patch -d "$work/tree" -p1 < "$patchdir/$patch_name" > "$log" 2>&1
+    fi || {
+        printf '%s\n' "$patch_name" > "$work/first-failed-patch.txt"
         cat "$log" >&2
         exit 1
     }
-    if grep -E 'fuzz|offset|FAILED|malformed' "$log" >/dev/null; then
-        cat "$log" >&2
+}
+
+if [ "$mode" = pr5 ]; then
+    pre=$work/pre-series
+    sed '/backport-vmalloc-signature.patch/,$d' "$series" > "$pre"
+    while IFS= read -r patch_name; do
+        apply_patch_checked "$patch_name" --fuzz=0 >/dev/null
+    done < "$pre"
+    find "$work/tree" \( -name '*.rej' -o -name '*.orig' \) -delete
+    for patch_name in \
+        backport-vmalloc-signature.patch \
+        backport-ioremap-nocache.patch \
+        backport-smp-call-return-types.patch \
+        backport-swiotlb-detection.patch \
+        fix-sg-allocation-conftests.patch \
+        backport-acpi-api-compat.patch \
+        backport-dma-mask-api.patch \
+        normalize-module-instances-warning.patch
+    do
+        apply_patch_checked "$patch_name" --fuzz=0
+        if grep -E 'fuzz|offset|FAILED|malformed' "$work/$patch_name.log" >/dev/null; then
+            cat "$work/$patch_name.log" >&2
+            exit 1
+        fi
+    done
+else
+    : > "$work/full-series-results.tsv"
+    while IFS= read -r patch_name; do
+        test -n "$patch_name" || continue
+        log=$work/$patch_name.log
+        if patch -d "$work/tree" -p1 < "$patchdir/$patch_name" > "$log" 2>&1; then
+            if grep -E 'fuzz|offset' "$log" >/dev/null; then
+                printf '%s\t%s\n' "$patch_name" "applied-with-fuzz-or-offset" >> "$work/full-series-results.tsv"
+            else
+                printf '%s\tclean\n' "$patch_name" >> "$work/full-series-results.tsv"
+            fi
+        else
+            printf '%s\n' "$patch_name" > "$work/first-failed-patch.txt"
+            printf '%s\treject\n' "$patch_name" >> "$work/full-series-results.tsv"
+            cat "$log" >&2
+            exit 1
+        fi
+    done < "$series"
+    expected=$(wc -l < "$series")
+    applied=$(wc -l < "$work/full-series-results.tsv")
+    if [ "$expected" -ne "$applied" ]; then
+        echo "full series incomplete: expected $expected applied $applied" >&2
         exit 1
     fi
- done
-if find "$work/tree" \( -name '*.rej' -o -name '*.orig' \) -print | grep . >/dev/null; then
-    echo 'patch integrity test left reject/orig files' >&2
+fi
+
+if find "$work/tree" \( -name '*.rej' -o -name '.pc' \) -print | grep . >/dev/null; then
+    echo 'patch integrity test left reject/quilt state files' >&2
     exit 1
 fi
+find "$work/tree" -name '*.orig' -delete

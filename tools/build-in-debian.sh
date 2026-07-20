@@ -159,6 +159,12 @@ run_repository_test sg-allocation-conftest tests/sg-allocation-conftest.sh
 run_repository_test acpi-api-compat tests/acpi-api-compat.sh
 run_repository_test dma-mask-api tests/dma-mask-api.sh
 
+set_stage module-series-integrity
+module_integrity_tree=$(tools/prepare-kernel-tree.sh "$suite" /work/module-series-integrity)
+printf '%s\n' "$module_integrity_tree" > /work/logs/module-series-integrity-tree.txt
+run_repository_test module-patch-integrity-pr5 tests/module-patch-integrity.sh "$module_integrity_tree"
+run_repository_test module-patch-integrity-full tests/module-patch-integrity.sh --full-series "$module_integrity_tree"
+
 set_stage source-build
 set +e
 dpkg-buildpackage -us -uc -S > /work/logs/source-build.log 2>&1
