@@ -124,12 +124,40 @@ printf '%s\n' "$pci_status" > /work/logs/supported-pci-ids.exit
 test "$pci_status" -eq 0
 
 cd /work/packaging
-tests/no-390xx-leaks.sh
-tests/amd64-only.sh
-tests/no-proprietary-artifacts.sh
-tests/generated-control-drift.sh
-tests/license-367xx.sh
-tests/supported-pci-ids.sh
+
+run_repository_test()
+{
+    name=$1
+    shift
+
+    set +e
+    "$@" > "/work/logs/test-${name}.log" 2>&1
+    status=$?
+    set -e
+
+    cat "/work/logs/test-${name}.log"
+    printf '%s\n' "$status" > "/work/logs/test-${name}.exit"
+    if [ "$status" -ne 0 ]; then
+        printf '%s\n' "$name" > /work/logs/failed-repository-test.txt
+        return "$status"
+    fi
+}
+
+set_stage repository-tests
+run_repository_test no-390xx-leaks tests/no-390xx-leaks.sh
+run_repository_test no-390xx-leaks-regression tests/no-390xx-leaks-regression.sh
+run_repository_test amd64-only tests/amd64-only.sh
+run_repository_test no-proprietary-artifacts tests/no-proprietary-artifacts.sh
+run_repository_test generated-control-drift tests/generated-control-drift.sh
+run_repository_test license-367xx tests/license-367xx.sh
+run_repository_test supported-pci-ids tests/supported-pci-ids.sh
+run_repository_test vmalloc-signature tests/vmalloc-signature.sh
+run_repository_test ioremap-nocache tests/ioremap-nocache.sh
+run_repository_test smp-call-return-type tests/smp-call-return-type.sh
+run_repository_test swiotlb-detection tests/swiotlb-detection.sh
+run_repository_test sg-allocation-conftest tests/sg-allocation-conftest.sh
+run_repository_test acpi-api-compat tests/acpi-api-compat.sh
+run_repository_test dma-mask-api tests/dma-mask-api.sh
 
 set_stage source-build
 set +e
