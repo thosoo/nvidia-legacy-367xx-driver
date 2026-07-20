@@ -223,7 +223,7 @@ fi
 set +e
 : > /work/logs/post-build-diagnostics-failures.txt
 {
-    PS4='+diagnostics:${LINENO}: '
+    PS4='+diagnostics: '
     set -x
 
     find /work/binary-source -type f -name '*.rej' -print > /work/logs/quilt-reject-files.txt || \

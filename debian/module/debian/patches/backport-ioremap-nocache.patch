@@ -1,22 +1,22 @@
 Description: backport modern nv_ioremap_nocache behavior from 440.64
  Modern x86 kernels removed ioremap_nocache(); plain ioremap() supplies the
- intended non-cacheable device mapping semantics.  Keep labels and cache/WC
- wrappers unchanged.
+ intended non-cacheable device mapping semantics.  Keep the allocation record
+ label for the nocache wrapper unchanged.
 Origin: backport, NVIDIA 440.64 ioremap compatibility pattern
 Forwarded: not-needed
 Last-Update: 2026-07-20
 
---- a/common/inc/nv-linux.h
-+++ b/common/inc/nv-linux.h
-@@ -686,7 +686,11 @@ static inline void *nv_ioremap(NvU64 phy
- #define NV_IOREMAP(phys, size)          nv_ioremap((phys), (size), "NV_IOREMAP")
- #define NV_IOREMAP_CACHE(phys, size)    ioremap_cache((phys), (size))
- #define NV_IOREMAP_WC(phys, size)       ioremap_wc((phys), (size))
-+#if defined(NV_IOREMAP_NOCACHE_PRESENT)
- #define NV_IOREMAP_NOCACHE(phys, size)  ioremap_nocache((phys), (size))
-+#else
-+#define NV_IOREMAP_NOCACHE(phys, size)  NV_IOREMAP((phys), (size))
-+#endif
- #define NV_IOUNMAP(ptr, size)           nv_iounmap((ptr), (size))
+--- a/common/inc/nv-linux.h	2026-07-20 07:24:40.344359269 +0000
++++ b/common/inc/nv-linux.h	2026-07-20 07:24:40.432359076 +0000
+@@ -690,7 +690,11 @@
  
- static inline void nv_iounmap(void *ptr, NvU64 size)
+ static inline void *nv_ioremap_nocache(NvU64 phys, NvU64 size)
+ {
++#if defined(NV_IOREMAP_NOCACHE_PRESENT)
+     void *ptr = ioremap_nocache(phys, size);
++#else
++    void *ptr = ioremap(phys, size);
++#endif
+     VM_ALLOC_RECORD(ptr, size, "vm_ioremap_nocache");
+     return ptr;
+ }

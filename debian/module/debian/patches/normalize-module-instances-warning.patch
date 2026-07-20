@@ -4,14 +4,16 @@ Origin: vendor, NVIDIA build-system default semantics
 Forwarded: not-needed
 Last-Update: 2026-07-20
 
---- a/common/inc/nv-linux.h
-+++ b/common/inc/nv-linux.h
-@@ -40,6 +40,10 @@
+--- a/common/inc/nv-linux.h	2026-07-20 07:26:06.396222438 +0000
++++ b/common/inc/nv-linux.h	2026-07-20 07:26:06.480222302 +0000
+@@ -11,6 +11,10 @@
  #ifndef _NV_LINUX_H_
  #define _NV_LINUX_H_
-+
+ 
 +#ifndef NV_BUILD_MODULE_INSTANCES
 +#define NV_BUILD_MODULE_INSTANCES 0
 +#endif
- 
++
  #include "nv.h"
+ #include "conftest.h"
+ 

@@ -5,12 +5,12 @@ Origin: backport, NVIDIA 470.129.06 pci/dma compatibility direction
 Forwarded: not-needed
 Last-Update: 2026-07-20
 
---- a/conftest.sh
-+++ b/conftest.sh
-@@ -2941,6 +2941,21 @@ compile_test() {
-             compile_check_conftest "$CODE" "NV_TIMER_SETUP_PRESENT" "" "functions"
+--- a/conftest.sh	2026-07-20 07:26:06.308222581 +0000
++++ b/conftest.sh	2026-07-20 07:26:06.392222444 +0000
+@@ -3023,6 +3023,18 @@
+             compile_check_conftest "$CODE" "NV_ACPI_DEV_FOR_EACH_CHILD_PRESENT" "" "functions"
          ;;
-+
+ 
 +        pci_set_dma_mask)
 +            CODE="
 +            #include <linux/pci.h>
@@ -22,21 +22,26 @@ Last-Update: 2026-07-20
 +
 +            compile_check_conftest "$CODE" "NV_PCI_SET_DMA_MASK_PRESENT" "" "functions"
 +        ;;
- 
++
          # When adding a new conftest entry, please use the correct format for
---- a/nvidia/nvidia.Kbuild
-+++ b/nvidia/nvidia.Kbuild
-@@ -118,6 +118,7 @@ NV_CONFTEST_FUNCTION_COMPILE_TESTS += acpi_bus_get_device
- NV_CONFTEST_FUNCTION_COMPILE_TESTS += pci_domain_nr
+         # specifying the relevant upstream Linux kernel commit.
+         #
+--- a/nvidia/nvidia.Kbuild	2026-07-20 07:26:06.308222581 +0000
++++ b/nvidia/nvidia.Kbuild	2026-07-20 07:26:06.392222444 +0000
+@@ -122,6 +122,7 @@
  NV_CONFTEST_FUNCTION_COMPILE_TESTS += pci_dma_mapping_error
+ NV_CONFTEST_FUNCTION_COMPILE_TESTS += acpi_fetch_acpi_dev
+ NV_CONFTEST_FUNCTION_COMPILE_TESTS += acpi_dev_for_each_child
 +NV_CONFTEST_FUNCTION_COMPILE_TESTS += pci_set_dma_mask
  NV_CONFTEST_FUNCTION_COMPILE_TESTS += sg_alloc_table
---- a/common/inc/nv-linux.h
-+++ b/common/inc/nv-linux.h
-@@ -1600,6 +1600,14 @@ static inline int nv_dma_maps_swiotlb(struct pci_dev *dev)
- #endif
+ #### Disabled for Debian legacy-367xx: no matching 367.134 conftest case.
+ #NV_CONFTEST_FUNCTION_COMPILE_TESTS += sg_init_table
+--- a/common/inc/nv-linux.h	2026-07-20 07:26:06.148222840 +0000
++++ b/common/inc/nv-linux.h	2026-07-20 07:26:06.396222438 +0000
+@@ -1473,6 +1473,15 @@
+     return flags;
  }
-+
+ 
 +static inline int nv_pci_set_dma_mask(struct pci_dev *pdev, u64 mask)
 +{
 +#if defined(NV_PCI_SET_DMA_MASK_PRESENT)
@@ -45,10 +50,63 @@ Last-Update: 2026-07-20
 +    return dma_set_mask(&pdev->dev, mask);
 +#endif
 +}
---- a/nvidia/nv.c
-+++ b/nvidia/nv.c
-@@ -2291,7 +2291,7 @@ int nv_dma_configure(struct pci_dev *dev)
--    status = pci_set_dma_mask(dev, mask);
-+    status = nv_pci_set_dma_mask(dev, mask);
-     if (status != 0)
-         return status;
++
+ static inline NvBool nv_dma_maps_swiotlb(struct pci_dev *dev)
+ {
+     NvBool swiotlb_in_use = NV_FALSE;
+--- a/nvidia/nv.c	2019-12-17 13:33:51.000000000 +0000
++++ b/nvidia/nv.c	2026-07-20 07:26:06.396222438 +0000
+@@ -2284,7 +2284,7 @@
+     if (!nvl->tce_bypass_enabled)
+     {
+         NvU64 new_mask = (((NvU64)1) << phys_addr_bits) - 1;
+-        pci_set_dma_mask(nvl->dev, new_mask);
++        nv_pci_set_dma_mask(nvl->dev, new_mask);
+     }
+ }
+ 
+@@ -3722,7 +3722,7 @@
+      * Otherwise, the DMA start address only needs to be set once, and it
+      * won't change afterward. Just return the cached value if asked again,
+      * to avoid the kernel printing redundant messages to the kernel
+-     * log when we call pci_set_dma_mask().
++     * log when we call nv_pci_set_dma_mask().
+      */
+     nvl = NV_GET_NVL_FROM_NV_STATE(nv);
+     if ((nv_tce_bypass_mode == NV_TCE_BYPASS_MODE_DISABLE) ||
+@@ -3773,7 +3773,7 @@
+      * as the starting address for all DMA mappings.
+      */
+     saved_dma_mask = dev->dma_mask;
+-    if (pci_set_dma_mask(dev, DMA_BIT_MASK(64)) != 0)
++    if (nv_pci_set_dma_mask(dev, DMA_BIT_MASK(64)) != 0)
+     {
+         goto done;
+     }
+@@ -3781,7 +3781,7 @@
+     dma_addr = pci_map_single(dev, NULL, 1, DMA_BIDIRECTIONAL);
+     if (pci_dma_mapping_error(dev, dma_addr))
+     {
+-        pci_set_dma_mask(dev, saved_dma_mask);
++        nv_pci_set_dma_mask(dev, saved_dma_mask);
+         goto done;
+     }
+ 
+@@ -3817,7 +3817,7 @@
+          */
+         nv_printf(NV_DBG_WARNINGS,
+             "NVRM: DMA window limited by platform\n");
+-        pci_set_dma_mask(dev, saved_dma_mask);
++        nv_pci_set_dma_mask(dev, saved_dma_mask);
+         goto done;
+     }
+     else if ((dma_addr & saved_dma_mask) != 0)
+@@ -3836,7 +3836,7 @@
+              */
+             nv_printf(NV_DBG_WARNINGS,
+                 "NVRM: DMA window limited by memory size\n");
+-            pci_set_dma_mask(dev, saved_dma_mask);
++            nv_pci_set_dma_mask(dev, saved_dma_mask);
+             goto done;
+         }
+     }

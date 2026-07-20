@@ -6,12 +6,12 @@ Origin: backport, Debian 340xx 0008-on-each-cpu-5.3.patch and 390xx pattern
 Forwarded: not-needed
 Last-Update: 2026-07-20
 
---- a/conftest.sh
-+++ b/conftest.sh
-@@ -2941,6 +2941,38 @@ compile_test() {
-             compile_check_conftest "$CODE" "NV_TIMER_SETUP_PRESENT" "" "functions"
+--- a/conftest.sh	2026-07-20 07:24:40.340359278 +0000
++++ b/conftest.sh	2026-07-20 07:24:40.528358865 +0000
+@@ -2957,6 +2957,34 @@
+             compile_check_conftest "$CODE" "NV_VMALLOC_HAS_PGPROT_T_ARG" "" "types"
          ;;
-+
+ 
 +        on_each_cpu_returns_int)
 +            CODE="
 +            #include <linux/smp.h>
@@ -39,41 +39,71 @@ Last-Update: 2026-07-20
 +
 +            compile_check_conftest "$CODE" "NV_SMP_CALL_FUNCTION_RETURNS_INT" "" "types"
 +        ;;
- 
++
          # When adding a new conftest entry, please use the correct format for
---- a/nvidia/nvidia.Kbuild
-+++ b/nvidia/nvidia.Kbuild
-@@ -150,6 +150,8 @@ NV_CONFTEST_TYPE_COMPILE_TESTS += vm_ar
- NV_CONFTEST_TYPE_COMPILE_TESTS += vm_fault_has_address
- NV_CONFTEST_TYPE_COMPILE_TESTS += vm_fault_has_flags
- NV_CONFTEST_TYPE_COMPILE_TESTS += atomic64_type
+         # specifying the relevant upstream Linux kernel commit.
+         #
+--- a/nvidia/nvidia.Kbuild	2026-07-20 07:24:40.340359278 +0000
++++ b/nvidia/nvidia.Kbuild	2026-07-20 07:24:40.528358865 +0000
+@@ -165,6 +165,8 @@
+ NV_CONFTEST_TYPE_COMPILE_TESTS += dma_ops
+ NV_CONFTEST_TYPE_COMPILE_TESTS += dma_map_ops
+ NV_CONFTEST_TYPE_COMPILE_TESTS += vmalloc_has_pgprot_t_arg
 +NV_CONFTEST_TYPE_COMPILE_TESTS += on_each_cpu_returns_int
 +NV_CONFTEST_TYPE_COMPILE_TESTS += smp_call_function_returns_int
+ NV_CONFTEST_TYPE_COMPILE_TESTS += noncoherent_swiotlb_dma_ops
+ NV_CONFTEST_TYPE_COMPILE_TESTS += vm_fault_present
  
- NV_CONFTEST_GENERIC_COMPILE_TESTS += dom0_kernel_present
---- a/common/inc/nv-linux.h
-+++ b/common/inc/nv-linux.h
-@@ -804,8 +804,28 @@ static inline void nv_iounmap(void *ptr,
+--- a/common/inc/nv-linux.h	2026-07-20 07:24:40.432359076 +0000
++++ b/common/inc/nv-linux.h	2026-07-20 07:24:40.532358857 +0000
+@@ -786,13 +786,23 @@
+ #if (NV_SMP_CALL_FUNCTION_ARGUMENT_COUNT == 4)
  #define NV_SMP_CALL_FUNCTION(func, info, wait)               \
      ({                                                       \
-         int __ret;                                           \
 +#if defined(NV_SMP_CALL_FUNCTION_RETURNS_INT)                \
-         __ret = smp_call_function(func, info, wait);          \
+         int __ret = smp_call_function(func, info, 1, wait);  \
 +#else                                                        \
-+        smp_call_function(func, info, wait);                  \
-+        __ret = 0;                                            \
++        int __ret = 0;                                       \
++        smp_call_function(func, info, 1, wait);              \
 +#endif                                                       \
          __ret;                                               \
-     })
- 
- #define NV_ON_EACH_CPU(func, info, wait)                     \
+      })
+ #elif (NV_SMP_CALL_FUNCTION_ARGUMENT_COUNT == 3)
+ #define NV_SMP_CALL_FUNCTION(func, info, wait)               \
      ({                                                       \
-         int __ret;                                           \
-+#if defined(NV_ON_EACH_CPU_RETURNS_INT)                      \
-         __ret = on_each_cpu(func, info, wait);                \
++#if defined(NV_SMP_CALL_FUNCTION_RETURNS_INT)                \
+         int __ret = smp_call_function(func, info, wait);     \
 +#else                                                        \
-+        on_each_cpu(func, info, wait);                        \
-+        __ret = 0;                                            \
++        int __ret = 0;                                       \
++        smp_call_function(func, info, wait);                 \
 +#endif                                                       \
          __ret;                                               \
-     })
+      })
+ #else
+@@ -806,14 +816,24 @@
+ #if (NV_ON_EACH_CPU_ARGUMENT_COUNT == 4)
+ #define NV_ON_EACH_CPU(func, info, wait)               \
+     ({                                                 \
++#if defined(NV_ON_EACH_CPU_RETURNS_INT)          \
+         int __ret = on_each_cpu(func, info, 1, wait);  \
+-        __ret;                                         \
++#else                                                 \
++        int __ret = 0;                                \
++        on_each_cpu(func, info, 1, wait);             \
++#endif                                                \
++        __ret;                                        \
+      })
+ #elif (NV_ON_EACH_CPU_ARGUMENT_COUNT == 3)
+ #define NV_ON_EACH_CPU(func, info, wait)               \
+     ({                                                 \
++#if defined(NV_ON_EACH_CPU_RETURNS_INT)          \
+         int __ret = on_each_cpu(func, info, wait);     \
+-        __ret;                                         \
++#else                                                 \
++        int __ret = 0;                                \
++        on_each_cpu(func, info, wait);                 \
++#endif                                                \
++        __ret;                                        \
+      })
+ #else
+ #error "NV_ON_EACH_CPU_ARGUMENT_COUNT value unrecognized!"
