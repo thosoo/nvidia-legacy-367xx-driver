@@ -1,10 +1,17 @@
-Author: Andreas Beckmann <anbe@debian.org>
 Description: fix hyphenation and spelling in nvidia-smi.1
+ Rebased from the Debian NVIDIA legacy-390xx packaging baseline onto the
+ NVIDIA 367.134 nvidia-smi.1 man page.  The GPU reset hunk differs from
+ NVIDIA 390.157 because 367.134 documents a single targeted device and does
+ not include the later NVLink reset wording; the retained change only escapes
+ the nvidia-smi command name in the equivalent 367.134 sentence.
+Author: Andreas Beckmann <anbe@debian.org>
+Origin: vendor, Debian nvidia-graphics-drivers-legacy-390xx 390.157-15
 Forwarded: not-needed
+Last-Update: 2026-07-18
 
 --- a/NVIDIA-Linux/nvidia-smi.1
 +++ b/NVIDIA-Linux/nvidia-smi.1
-@@ -8,7 +8,7 @@ nvidia\-smi \- NVIDIA System Management
+@@ -8,7 +8,7 @@
  
  .SH "SYNOPSIS"
  .PP
@@ -12,8 +19,8 @@ Forwarded: not-needed
 +nvidia\-smi [OPTION1 [ARG1]] [OPTION2 [ARG2]] ...
  
  
- .PP
-@@ -85,7 +85,7 @@ Display only selected information: MEMOR
+ .PP 
+@@ -85,7 +85,7 @@
  Flags can be combined with comma e.g.
  "MEMORY,ECC".
  Sampling data with max, min and avg is also returned for POWER, UTILIZATION and CLOCK display types.
@@ -22,16 +29,16 @@ Forwarded: not-needed
  
  
  .SS "\-l SEC, \-\-loop=SEC"
-@@ -225,7 +225,7 @@ Typically useful if a double bit ECC err
- Optional \fI\-i\fR switch can be used to target one or more specific devices.
- Without this option, all GPUs are reset.
+@@ -224,7 +224,7 @@
+ Typically useful if a double bit ECC error has occurred.
+ Requires \fI\-i\fR switch to target specific device.
  Requires root.
--There can\(aqt be any applications using these devices (e.g. CUDA application, graphics application like X server, monitoring application like other instance of nvidia-smi).
-+There can\(aqt be any applications using these devices (e.g. CUDA application, graphics application like X server, monitoring application like other instance of nvidia\-smi).
+-There can\(aqt be any applications using this particular device (e.g. CUDA application, graphics application like X server, monitoring application like other instance of nvidia-smi).
++There can\(aqt be any applications using this particular device (e.g. CUDA application, graphics application like X server, monitoring application like other instance of nvidia\-smi).
  There also can\(aqt be any compute applications running on any other GPU in the system.
+ Only on supported devices from Fermi and Kepler family running on Linux.
  
- Any GPUs with NVLink connections to a GPU being reset must also be reset in
-@@ -267,7 +267,7 @@ Specifies maximum power limit in watts.
+@@ -259,7 +259,7 @@
  Accepts integer and floating point numbers.
  Only on supported devices from Kepler family.
  Requires administrator privileges.
@@ -40,7 +47,7 @@ Forwarded: not-needed
  
  .SS "\-am, \-\-accounting\-mode=MODE"
  Enables or disables GPU Accounting.
-@@ -342,10 +342,10 @@ The specified file will be overwritten.
+@@ -334,10 +334,10 @@
  Display Unit DTD instead of device DTD.
  
  .SS "stats"
@@ -53,7 +60,7 @@ Forwarded: not-needed
  Shows all GPUs NVML is able to detect but CPU affinity information will only be shown for GPUs with Kepler or
  newer architectures.
  Note: GPU enumeration is the same as NVML.
-@@ -430,7 +430,7 @@ Display can be active even when no monit
+@@ -419,7 +419,7 @@
  .SS "Persistence Mode"
  A flag that indicates whether persistence mode is enabled for the GPU.
  Value is either "Enabled" or "Disabled".
@@ -62,7 +69,7 @@ Forwarded: not-needed
  This minimizes the driver load latency associated with running dependent apps, such as CUDA programs.
  For all CUDA-capable products.
  Linux only.
-@@ -440,7 +440,7 @@ A flag that indicates whether accounting
+@@ -429,7 +429,7 @@
  Value is either \"Enabled\" or \"Disabled\"
  When accounting is enabled statistics are calculated for each compute process running on the GPU.
  Statistics can be queried during the lifetime or after termination of the process. The execution time of process is reported as 0 while the process is in running state and updated to actual execution time after the process has terminated.
@@ -71,7 +78,7 @@ Forwarded: not-needed
  
  .SS "Accounting Mode Buffer Size"
  Returns the size of the circular buffer that holds list of processes that can be queried for accounting stats.
-@@ -514,7 +514,7 @@ Version for the power management data.
+@@ -503,7 +503,7 @@
  
  
  .SS "GPU Operation Mode"
@@ -80,7 +87,7 @@ Forwarded: not-needed
  
  Each GOM is designed to meet specific user needs.
  
-@@ -847,7 +847,7 @@ Please note that for boards without INA
+@@ -832,7 +832,7 @@
  
  .TP 15
  .B "Power Limit"
@@ -89,7 +96,7 @@ Forwarded: not-needed
  Only available if power management is supported.
  Requires Inforom PWR object version 3.0 or higher or Kepler device.
  On Kepler devices Power Limit can be adjusted using \-pl,\-\-power\-limit= switches.
-@@ -1381,7 +1381,7 @@ Displays help information for using the
+@@ -1362,7 +1362,7 @@
  .PP
  .SH "UNIT ATTRIBUTES"
  .PP
@@ -98,7 +105,7 @@ Forwarded: not-needed
  Unless otherwise noted all numerical results are base 10 and unitless.
  
  .SS "Timestamp"
-@@ -1493,7 +1493,7 @@ For all S-class products.
+@@ -1474,7 +1474,7 @@
  .PP
  .SH "NOTES"
  .PP
@@ -107,16 +114,16 @@ Forwarded: not-needed
  Please see the relevant section of the driver README file.
  
  .PP
-@@ -1511,7 +1511,7 @@ Query UUID and persistence mode of all G
+@@ -1492,7 +1492,7 @@
  Query ECC errors and power consumption for GPU 0 at a frequency of 10 seconds, indefinitely, and record to the file out.log.
- .SS
+ .SS 
  "nvidia\-smi -c 1 -i GPU\-b2f5f1b745e3d23d\-65a3a26d-097db358\-7303e0b6\-149642ff3d219f8587cde3a8"
 -Set the compute mode to "PROHIBITED" for GPU with UUID "GPU\-b2f5f1b745e3d23d\-65a3a26d-097db358\-7303e0b6\-149642ff3d219f8587cde3a8".
 +Set the compute mode to "PROHIBITED" for GPU with UUID "GPU-b2f5f1b745e3d23d-65a3a26d-097db358-7303e0b6-149642ff3d219f8587cde3a8".
  .SS "nvidia\-smi -q -u -x --dtd"
  Query attributes for all Units once, and display in XML format with embedded DTD to stdout.
  .SS "nvidia\-smi --dtd -u -f nvsmi_unit.dtd"
-@@ -1598,13 +1598,13 @@ Set applications clocks to 2500 MHz memo
+@@ -1579,13 +1579,13 @@
    * Added support for K40d and K80.
  .PP 1
  
@@ -132,7 +139,7 @@ Forwarded: not-needed
  .PP 1
  
    * Added support for displaying the GPU encoder and decoder utilizations
-@@ -1637,19 +1637,19 @@ Set applications clocks to 2500 MHz memo
+@@ -1618,19 +1618,19 @@
   
  .PP 1
  
@@ -155,7 +162,7 @@ Forwarded: not-needed
  .PP 1
  
   
-@@ -1658,13 +1658,13 @@ Set applications clocks to 2500 MHz memo
+@@ -1639,13 +1639,13 @@
    * Added reporting of Display Active state and updated documentation to clarify how it differs from Display Mode and Display Active state
  .PP 1
  
@@ -172,7 +179,7 @@ Forwarded: not-needed
  .PP 1
  
    * Renamed Clock Throttle Reason User Defined Clocks to Applications Clocks Setting
-@@ -1673,16 +1673,16 @@ Set applications clocks to 2500 MHz memo
+@@ -1654,16 +1654,16 @@
    * On error, return codes have distinct non zero values for each error class. See RETURN VALUE section
  .PP 1
  
@@ -192,7 +199,7 @@ Forwarded: not-needed
  .PP 1
  
    * Added the enforced power limit to the query output
-@@ -1691,7 +1691,7 @@ Set applications clocks to 2500 MHz memo
+@@ -1672,7 +1672,7 @@
   
  .PP 1
  
@@ -201,7 +208,7 @@ Forwarded: not-needed
  .PP 1
  
   
-@@ -1700,13 +1700,13 @@ Set applications clocks to 2500 MHz memo
+@@ -1681,13 +1681,13 @@
    * Added reporting of GPU Operation Mode (GOM)
  .PP 1
  
@@ -217,7 +224,7 @@ Forwarded: not-needed
  .PP 1
  
   
-@@ -1721,10 +1721,10 @@ Set applications clocks to 2500 MHz memo
+@@ -1702,10 +1702,10 @@
    * Better error handling when NVML shared library is not present in the system
  .PP 1
  
@@ -230,7 +237,7 @@ Forwarded: not-needed
  .PP 1
  
    * When reporting free memory, calculate it from the rounded total and used memory so that values add up
-@@ -1733,7 +1733,7 @@ Set applications clocks to 2500 MHz memo
+@@ -1714,7 +1714,7 @@
    * Added reporting of power management limit constraints and default limit
  .PP 1
  
@@ -239,7 +246,7 @@ Forwarded: not-needed
  .PP 1
  
    * Added reporting of texture memory ECC errors
-@@ -1745,7 +1745,7 @@ Set applications clocks to 2500 MHz memo
+@@ -1726,7 +1726,7 @@
   
  .PP 1
  
@@ -247,8 +254,8 @@ Forwarded: not-needed
 +  === Changes between nvidia\-smi v2.285 and v3.295 ===
  .PP 1
  
-  
-@@ -1757,7 +1757,7 @@ Set applications clocks to 2500 MHz memo
+   
+@@ -1738,7 +1738,7 @@
    * When running commands on multiple GPUs at once N/A errors are treated as warnings.
  .PP 1
  
@@ -257,7 +264,7 @@ Forwarded: not-needed
  .PP 1
  
    * UUID format changed to match UUID standard and will report a different value.
-@@ -1766,7 +1766,7 @@ Set applications clocks to 2500 MHz memo
+@@ -1747,7 +1747,7 @@
   
  .PP 1
  
@@ -265,8 +272,8 @@ Forwarded: not-needed
 +  === Changes between nvidia\-smi v2.0 and v2.285 ===
  .PP 1
  
-  
-@@ -1775,7 +1775,7 @@ Set applications clocks to 2500 MHz memo
+   
+@@ -1756,7 +1756,7 @@
    * Report VBIOS version.
  .PP 1
  
@@ -275,7 +282,7 @@ Forwarded: not-needed
  .PP 1
  
    * Added reporting of PCI Sub System ID
-@@ -1784,13 +1784,13 @@ Set applications clocks to 2500 MHz memo
+@@ -1765,13 +1765,13 @@
    * Updated docs to indicate we support M2075 and C2075
  .PP 1
  
@@ -291,7 +298,7 @@ Forwarded: not-needed
  .PP 1
  
    * Added message when NVIDIA driver is not running
-@@ -1802,19 +1802,19 @@ Set applications clocks to 2500 MHz memo
+@@ -1783,19 +1783,19 @@
    * Getting pending driver model works on non-admin
  .PP 1
  
@@ -315,7 +322,7 @@ Forwarded: not-needed
  .PP 1
  
    * Changed versioning scheme to also include "driver version"
-@@ -1823,10 +1823,10 @@ Set applications clocks to 2500 MHz memo
+@@ -1804,10 +1804,10 @@
    * XML format always conforms to DTD, even when error conditions occur
  .PP 1
  

@@ -1,8 +1,12 @@
-From 6f54aa8c491ea4db844c3ba0a188c4bec3811d7d Mon Sep 17 00:00:00 2001
-From: Andreas Beckmann <anbe@debian.org>
-Date: Mon, 26 May 2025 09:58:49 +0200
-Subject: [PATCH] backport nv_timer_delete_sync changes from 570.153.02
+From: Debian NVIDIA Maintainers
+Subject: backport nv_timer_delete_sync for 367.134
+Origin: Debian NVIDIA packaging 570.153.02 compatibility patch
+Forwarded: not-needed
 
+Rebased for NVIDIA 367.134. The void wrapper is used only at call sites that
+ignore the cancellation result; the modeset list-cleanup path keeps the
+return-valued branch so legacy del_timer_sync() behavior is preserved when the
+exported timer_delete_sync symbol is unavailable.
 ---
  common/inc/nv-timer.h                 | 9 +++++++++
  nvidia-modeset/nvidia-modeset-linux.c | 7 ++++++-
@@ -12,7 +16,6 @@ Subject: [PATCH] backport nv_timer_delete_sync changes from 570.153.02
  5 files changed, 18 insertions(+), 2 deletions(-)
 
 diff --git a/common/inc/nv-timer.h b/common/inc/nv-timer.h
-index 18df6ea3..ddf90d8f 100644
 --- a/common/inc/nv-timer.h
 +++ b/common/inc/nv-timer.h
 @@ -63,4 +63,13 @@ static inline void nv_timer_setup(struct nv_timer *nv_timer,
@@ -30,18 +33,17 @@ index 18df6ea3..ddf90d8f 100644
 +
  #endif // __NV_TIMER_H__
 diff --git a/nvidia-modeset/nvidia-modeset-linux.c b/nvidia-modeset/nvidia-modeset-linux.c
-index 00105f68..98a10d20 100644
 --- a/nvidia-modeset/nvidia-modeset-linux.c
 +++ b/nvidia-modeset/nvidia-modeset-linux.c
-@@ -36,6 +36,7 @@
- #include "nv-kthread-q.h"
+@@ -33,6 +33,7 @@
+ #include "nvkms-ioctl.h"
  
- #include "nv-time.h"
+ #include "conftest.h"
 +#include "nv-timer.h"
+ #include "nv-procfs.h"
  
- /*
-  * Commit aefb2f2e619b ("x86/bugs: Rename CONFIG_RETPOLINE =>
-@@ -499,7 +500,7 @@ static void nvkms_kthread_q_callback(void *arg)
+ #define NVKMS_MAJOR_DEVICE_NUMBER 195
+@@ -505,7 +506,7 @@ static void nvkms_kthread_q_callback(nv_kthread_q_item_t *work)
       * pending timers and than waiting for workqueue callbacks.
       */
      if (timer->kernel_timer_created) {
@@ -50,9 +52,9 @@ index 00105f68..98a10d20 100644
      }
  
      down(&nvkms_lock);
-@@ -1279,7 +1280,11 @@ restart:
-              * completion, and we wait for queue completion with
-              * nv_kthread_q_stop below.
+@@ -1240,7 +1241,11 @@ restart:
+              * completion, and we wait for workqueue completion with flush_scheduled_work
+              * below.
               */
 +#if !defined(NV_BSD) && NV_IS_EXPORT_SYMBOL_PRESENT_timer_delete_sync
 +            if (timer_delete_sync(&timer->kernel_timer) == 1) {
@@ -63,19 +65,17 @@ index 00105f68..98a10d20 100644
                  list_del(&timer->timers_list);
                  
 diff --git a/nvidia-modeset/nvidia-modeset.Kbuild b/nvidia-modeset/nvidia-modeset.Kbuild
-index 8debf27a..2de37dba 100644
 --- a/nvidia-modeset/nvidia-modeset.Kbuild
 +++ b/nvidia-modeset/nvidia-modeset.Kbuild
-@@ -91,3 +91,4 @@ NV_CONFTEST_FUNCTION_COMPILE_TESTS += PDE_DATA
+@@ -85,3 +85,4 @@ NV_CONFTEST_FUNCTION_COMPILE_TESTS += proc_create_data
+ NV_CONFTEST_FUNCTION_COMPILE_TESTS += pde_data
  NV_CONFTEST_FUNCTION_COMPILE_TESTS += proc_remove
  NV_CONFTEST_FUNCTION_COMPILE_TESTS += timer_setup
- NV_CONFTEST_FUNCTION_COMPILE_TESTS += do_gettimeofday
 +NV_CONFTEST_SYMBOL_COMPILE_TESTS += is_export_symbol_present_timer_delete_sync
 diff --git a/nvidia/nv.c b/nvidia/nv.c
-index 2edbb82c..fb8d0634 100644
 --- a/nvidia/nv.c
 +++ b/nvidia/nv.c
-@@ -3525,7 +3525,7 @@ int NV_API_CALL nv_stop_rc_timer(
+@@ -2821,7 +2821,7 @@ int NV_API_CALL nv_stop_rc_timer(
  
      nv_printf(NV_DBG_INFO, "NVRM: stopping rc timer\n");
      nv->rc_timer_enabled = 0;
@@ -85,17 +85,13 @@ index 2edbb82c..fb8d0634 100644
  
      return 0;
 diff --git a/nvidia/nvidia.Kbuild b/nvidia/nvidia.Kbuild
-index 810626ba..41a7ca4e 100644
 --- a/nvidia/nvidia.Kbuild
 +++ b/nvidia/nvidia.Kbuild
-@@ -169,6 +169,7 @@ NV_CONFTEST_SYMBOL_COMPILE_TESTS += is_export_symbol_gpl_of_node_to_nid
+@@ -145,6 +145,7 @@ NV_CONFTEST_FUNCTION_COMPILE_TESTS += cpuhp_setup_state
+ NV_CONFTEST_FUNCTION_COMPILE_TESTS += timer_setup
  NV_CONFTEST_SYMBOL_COMPILE_TESTS += is_export_symbol_present_swiotlb_map_sg_attrs
- NV_CONFTEST_SYMBOL_COMPILE_TESTS += is_export_symbol_present_swiotlb_dma_ops
  NV_CONFTEST_SYMBOL_COMPILE_TESTS += is_export_symbol_gpl_screen_info
 +NV_CONFTEST_SYMBOL_COMPILE_TESTS += is_export_symbol_present_timer_delete_sync
  
  NV_CONFTEST_TYPE_COMPILE_TESTS += i2c_adapter
  NV_CONFTEST_TYPE_COMPILE_TESTS += pm_message_t
--- 
-2.39.5
-

@@ -1,0 +1,4 @@
+#!/bin/sh
+set -eu
+out=${1:-../build-results/trixie}
+exec "$(dirname "$0")/build-in-container.sh" trixie "$out"

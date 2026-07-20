@@ -1,0 +1,26 @@
+Author: OpenAI Codex
+Description: guard linux/ioctl32.h with the compat_ioctl feature probe
+ NVIDIA 367.134 already uses NV_FILE_OPERATIONS_HAS_COMPAT_IOCTL to select the
+ modern file_operations.compat_ioctl callback and to disable manual
+ register_ioctl32_conversion()/unregister_ioctl32_conversion() call sites, but
+ nv-linux.h still includes linux/ioctl32.h based on the obsolete HAVE_COMPAT_IOCTL
+ condition. Linux 5.9+ no longer exports linux/ioctl32.h. Match the include
+ condition to the existing feature-detected manual-registration condition so
+ Bookworm/Trixie use the compat_ioctl callback path without including the
+ removed header, while older kernels without file_operations.compat_ioctl keep
+ the legacy registration path.
+Forwarded: not-needed
+
+diff -Naur a/common/inc/nv-linux.h b/common/inc/nv-linux.h
+--- a/common/inc/nv-linux.h	2026-07-20 01:40:34.968207035 +0000
++++ b/common/inc/nv-linux.h	2026-07-20 01:40:35.632217774 +0000
+@@ -156,7 +156,8 @@
+ }
+ #endif
+ 
+-#if defined(NVCPU_X86_64) && !defined(HAVE_COMPAT_IOCTL)
++#if defined(NVCPU_X86_64) && \
++  !defined(NV_FILE_OPERATIONS_HAS_COMPAT_IOCTL)
+ #include <linux/syscalls.h>         /* sys_ioctl()                      */
+ #include <linux/ioctl32.h>          /* register_ioctl32_conversion()    */
+ #endif

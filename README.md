@@ -12,7 +12,7 @@ Install `build-essential debhelper-compat devscripts dpkg-dev dh-dkms dkms quilt
 
 ## Fetch/import upstream payload
 
-Run `debian/scripts/fetch-367.134-runfile /path/to/workdir`. It downloads the exact 367.134 amd64 runfile, verifies SHA-256 `c621c6068c1d09a88a4159963093fa1a28b45c7c989280c273c7d7a2b566c62f`, extracts non-interactively, and creates `nvidia-graphics-drivers-legacy-367xx_367.134.orig-amd64.tar.xz`.
+Run `debian/scripts/fetch-367.134-runfile /path/to/import /path/to/output`. It downloads the exact 367.134 amd64 runfile into the import directory, verifies SHA-256 `c621c6068c1d09a88a4159963093fa1a28b45c7c989280c273c7d7a2b566c62f`, extracts non-interactively, and atomically creates both `/path/to/output/nvidia-graphics-drivers-legacy-367xx_367.134.orig.tar.xz` and `/path/to/output/nvidia-graphics-drivers-legacy-367xx_367.134.orig-amd64.tar.xz`. The primary `*.orig.tar.xz` is the empty upstream component required by Debian source format `3.0 (quilt)`; the `*.orig-amd64.tar.xz` component contains the verified `amd64/NVIDIA-Linux-x86_64-367.134.run`. The convenience wrapper `tools/create-orig.sh /path/to/output` uses `/path/to/output/import` as scratch space and verifies both tarball layouts.
 
 ## Build
 

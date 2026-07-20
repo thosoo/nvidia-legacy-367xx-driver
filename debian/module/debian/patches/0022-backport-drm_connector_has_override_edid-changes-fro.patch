@@ -1,22 +1,21 @@
 From 77e0693909b65d92e04fc9c69c9f1eb52364cd9a Mon Sep 17 00:00:00 2001
 From: Andreas Beckmann <anbe@debian.org>
 Date: Fri, 6 Jan 2023 14:21:15 +0100
-Subject: [PATCH] backport drm_connector_has_override_edid changes from
- 525.78.01
+Subject: [PATCH] backport drm_connector_has_override_edid changes for 367.134
+Origin: Debian nvidia-graphics-drivers 390-series packaging, rebased from the
+ 525.78.01 compatibility backport onto NVIDIA 367.134.
+Description: Detect kernels where struct drm_connector no longer exposes the
+ override_edid member and use drm_edid_override_connector_update() for the
+ 367.134 connector/encoder paths that otherwise read connector->override_edid
+ directly. The 367.134 driver does not contain the later 390-series display-detect
+ copy path, so that hunk is replaced by equivalent guards around the two direct
+ override_edid checks that exist in 367.134. The mode_config.fb_base assignment
+ is removed because newer DRM kernels removed that member.
 
----
- conftest.sh                       | 22 ++++++++++++++++++++++
- nvidia-drm/nvidia-drm-connector.c |  5 +++++
- nvidia-drm/nvidia-drm-drv.c       |  4 ----
- nvidia-drm/nvidia-drm.Kbuild      |  1 +
- 4 files changed, 28 insertions(+), 4 deletions(-)
-
-diff --git a/conftest.sh b/conftest.sh
-index b291ddf..921490a 100755
 --- a/conftest.sh
 +++ b/conftest.sh
-@@ -4655,6 +4655,28 @@ compile_test() {
-             compile_check_conftest "$CODE" "NV_ACPI_VIDEO_BACKLIGHT_USE_NATIVE" "" "functions"
+@@ -2949,6 +2949,27 @@
+             compile_check_conftest "$CODE" "NV_TIMER_SETUP_PRESENT" "" "functions"
          ;;
  
 +        drm_connector_has_override_edid)
@@ -24,8 +23,7 @@ index b291ddf..921490a 100755
 +            # Determine if 'struct drm_connector' has an 'override_edid' member.
 +            #
 +            # Removed by commit 90b575f52c6ab ("drm/edid: detach debugfs EDID
-+            # override from EDID property update") in linux-next, expected in
-+            # v6.2-rc1.
++            # override from EDID property update") in v6.2-rc1.
 +            #
 +            CODE="
 +            #if defined(NV_DRM_DRM_CRTC_H_PRESENT)
@@ -44,54 +42,72 @@ index b291ddf..921490a 100755
          # When adding a new conftest entry, please use the correct format for
          # specifying the relevant upstream Linux kernel commit.
          #
-diff --git a/nvidia-drm/nvidia-drm-connector.c b/nvidia-drm/nvidia-drm-connector.c
-index 54167a7..484204f 100644
 --- a/nvidia-drm/nvidia-drm-connector.c
 +++ b/nvidia-drm/nvidia-drm-connector.c
-@@ -42,6 +42,7 @@
- 
+@@ -34,6 +34,10 @@
  #include <drm/drm_atomic.h>
  #include <drm/drm_atomic_helper.h>
-+#include <drm/drm_edid.h>
  
- static void nv_drm_connector_destroy(struct drm_connector *connector)
++#if !defined(NV_DRM_CONNECTOR_HAS_OVERRIDE_EDID)
++#include <drm/drm_edid.h>
++#endif
++
+ static void nvidia_connector_destroy(struct drm_connector *connector)
  {
-@@ -98,7 +99,11 @@ __nv_drm_detect_encoder(struct NvKmsKapiDynamicDisplayParams *pDetectParams,
-             break;
-     }
+     struct drm_device *dev = connector->dev;
+@@ -138,7 +142,11 @@
+ 
+     nv_connector->nv_detected_encoder = nv_detected_encoder;
  
 +#if defined(NV_DRM_CONNECTOR_HAS_OVERRIDE_EDID)
-     if (connector->override_edid) {
+     if (!connector->override_edid && nv_detected_encoder->edid != NULL)
 +#else
-+    if (drm_edid_override_connector_update(connector) > 0) {
++    if ((drm_edid_override_connector_update(connector) <= 0) && nv_detected_encoder->edid != NULL)
 +#endif
-         const struct drm_property_blob *edid = connector->edid_blob_ptr;
+     {
+         nvidia_drm_edid_ref(nv_detected_encoder->edid);
+         nv_connector->edid = nv_detected_encoder->edid;
+--- a/nvidia-drm/nvidia-drm-encoder.c
++++ b/nvidia-drm/nvidia-drm-encoder.c
+@@ -34,6 +34,10 @@
+ #include <drm/drm_atomic.h>
+ #include <drm/drm_atomic_helper.h>
  
-         if (edid->length <= sizeof(pDetectParams->edid.buffer)) {
-diff --git a/nvidia-drm/nvidia-drm-drv.c b/nvidia-drm/nvidia-drm-drv.c
-index 1289cb3..cb8dacc 100644
++#if !defined(NV_DRM_CONNECTOR_HAS_OVERRIDE_EDID)
++#include <drm/drm_edid.h>
++#endif
++
+ static void nvidia_encoder_destroy(struct drm_encoder *encoder)
+ {
+     struct drm_device *dev = encoder->dev;
+@@ -362,7 +366,11 @@
+ 
+     connector = &nv_encoder->nv_connector->base;
+ 
++#if defined(NV_DRM_CONNECTOR_HAS_OVERRIDE_EDID)
+     if (connector->override_edid)
++#else
++    if (drm_edid_override_connector_update(connector) > 0)
++#endif
+     {
+         pDisplayInfo =
+             nvkms_get_display_info(nv_dev->pDevice,
 --- a/nvidia-drm/nvidia-drm-drv.c
 +++ b/nvidia-drm/nvidia-drm-drv.c
-@@ -239,10 +239,6 @@ nv_drm_init_mode_config(struct nv_drm_device *nv_dev,
+@@ -147,9 +147,6 @@
      dev->mode_config.preferred_depth = 24;
      dev->mode_config.prefer_shadow = 1;
  
 -    /* Currently unused. Update when needed. */
 -
 -    dev->mode_config.fb_base = 0;
--
-     dev->mode_config.async_page_flip = false;
  
-     /* Initialize output polling support */
-diff --git a/nvidia-drm/nvidia-drm.Kbuild b/nvidia-drm/nvidia-drm.Kbuild
-index e283874..eab71b7 100644
+     dev->mode_config.async_page_flip = true;
+ 
 --- a/nvidia-drm/nvidia-drm.Kbuild
 +++ b/nvidia-drm/nvidia-drm.Kbuild
-@@ -106,3 +106,4 @@ NV_CONFTEST_TYPE_COMPILE_TESTS += drm_device_has_pdev
- NV_CONFTEST_TYPE_COMPILE_TESTS += dma_resv_add_fence
- NV_CONFTEST_TYPE_COMPILE_TESTS += dma_resv_reserve_fences
- NV_CONFTEST_TYPE_COMPILE_TESTS += reservation_object_reserve_shared_has_num_fences_arg
+@@ -69,3 +69,4 @@
+ NV_CONFTEST_TYPE_COMPILE_TESTS += drm_mode_connector_list_update_has_merge_type_bits_arg
+ NV_CONFTEST_TYPE_COMPILE_TESTS += drm_driver_unload_has_int_return_type
+ NV_CONFTEST_TYPE_COMPILE_TESTS += drm_helper_mode_fill_fb_struct_has_const_mode_cmd_arg
 +NV_CONFTEST_TYPE_COMPILE_TESTS += drm_connector_has_override_edid
--- 
-2.20.1
-

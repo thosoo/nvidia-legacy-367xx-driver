@@ -1,0 +1,22 @@
+Author: OpenAI Codex
+Description: guard asm/kmap_types.h for Linux 5.11 and newer
+ Linux 5.11 removed asm/kmap_types.h from exported kernel headers. NVIDIA
+ 390.143/390.157 and the later 460.32.03 source no longer include it, Debian
+ 340xx deletes the include, and ELRepo's 367xx patch keeps it only for older
+ non-RHEL kernels. Keep the include for pre-5.11 kernels where the header may
+ exist, but omit it for Bookworm/Trixie and newer kernels without importing
+ ELRepo's RHEL-specific conditionals.
+Forwarded: not-needed
+
+--- a/common/inc/nv-linux.h
++++ b/common/inc/nv-linux.h
+@@ -112,7 +112,9 @@
+ 
+ #include <linux/moduleparam.h>      /* module_param()                   */
+ #include <asm/tlbflush.h>           /* flush_tlb(), flush_tlb_all()     */
++#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 11, 0)
+ #include <asm/kmap_types.h>         /* page table entry lookup          */
++#endif
+ 
+ #include <linux/pci.h>              /* pci_find_class, etc              */
+ #include <linux/interrupt.h>        /* tasklets, interrupt helpers      */

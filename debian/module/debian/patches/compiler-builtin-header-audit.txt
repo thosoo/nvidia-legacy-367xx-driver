@@ -1,0 +1,20 @@
+Prepared NVIDIA 367.134 kernel-tree audit for compiler-provided standard headers.
+
+Before backport-linux-standard-headers.patch:
+stdarg.h direct includes: 4
+  common/inc/nv.h: va_list for nv_log_error prototype; kernel/shared RM header; replace with nv_stdarg.h.
+  common/inc/os-interface.h: va_list for os_log_error prototype; kernel/shared OS header; replace with nv_stdarg.h.
+  nvidia-modeset/nvidia-modeset-os-interface.h: va_list for nvkms_vsnprintf; modeset kernel interface header; replace with nv_stdarg.h.
+  nvidia-uvm/uvm8_mmu.c: variadic UVM push helper use; kernel compilation unit; replace with nv_stdarg.h.
+
+stddef.h direct includes: 2
+  nvidia-modeset/nvkms.h: size_t for NVKMS callback typedefs; modeset shared header; replace with nv_stddef.h.
+  nvidia-modeset/nvidia-modeset-os-interface.h: size_t for allocation/string/copy prototypes; modeset kernel interface header; replace with nv_stddef.h.
+
+Existing kernel-safe standard-definition include:
+  common/inc/nv-linux.h already includes <linux/stddef.h> for NULL and offsetof and remains unchanged.
+
+After backport-linux-standard-headers.patch:
+  common/inc/nv_stdarg.h selects <linux/stdarg.h> under __KERNEL__ and <stdarg.h> otherwise.
+  common/inc/nv_stddef.h selects <linux/stddef.h> under __KERNEL__ and <stddef.h> otherwise.
+  No kernel source/header outside those wrappers directly includes userspace <stdarg.h> or <stddef.h>.
