@@ -5,8 +5,8 @@ Origin: backport, NVIDIA 470.129.06 pci/dma compatibility direction
 Forwarded: not-needed
 Last-Update: 2026-07-20
 
---- a/conftest.sh	2026-07-20 07:26:06.308222581 +0000
-+++ b/conftest.sh	2026-07-20 07:26:06.392222444 +0000
+--- a/conftest.sh	2026-07-20 08:55:26.054937288 +0000
++++ b/conftest.sh	2026-07-20 08:55:26.142935838 +0000
 @@ -3023,6 +3023,18 @@
              compile_check_conftest "$CODE" "NV_ACPI_DEV_FOR_EACH_CHILD_PRESENT" "" "functions"
          ;;
@@ -26,8 +26,8 @@ Last-Update: 2026-07-20
          # When adding a new conftest entry, please use the correct format for
          # specifying the relevant upstream Linux kernel commit.
          #
---- a/nvidia/nvidia.Kbuild	2026-07-20 07:26:06.308222581 +0000
-+++ b/nvidia/nvidia.Kbuild	2026-07-20 07:26:06.392222444 +0000
+--- a/nvidia/nvidia.Kbuild	2026-07-20 08:55:26.054937288 +0000
++++ b/nvidia/nvidia.Kbuild	2026-07-20 08:55:26.146935772 +0000
 @@ -122,6 +122,7 @@
  NV_CONFTEST_FUNCTION_COMPILE_TESTS += pci_dma_mapping_error
  NV_CONFTEST_FUNCTION_COMPILE_TESTS += acpi_fetch_acpi_dev
@@ -36,9 +36,9 @@ Last-Update: 2026-07-20
  NV_CONFTEST_FUNCTION_COMPILE_TESTS += sg_alloc_table
  #### Disabled for Debian legacy-367xx: no matching 367.134 conftest case.
  #NV_CONFTEST_FUNCTION_COMPILE_TESTS += sg_init_table
---- a/common/inc/nv-linux.h	2026-07-20 07:26:06.148222840 +0000
-+++ b/common/inc/nv-linux.h	2026-07-20 07:26:06.396222438 +0000
-@@ -1473,6 +1473,15 @@
+--- a/common/inc/nv-linux.h	2026-07-20 08:55:26.034937618 +0000
++++ b/common/inc/nv-linux.h	2026-07-20 08:55:26.146935772 +0000
+@@ -1485,6 +1485,15 @@
      return flags;
  }
  
@@ -55,7 +55,7 @@ Last-Update: 2026-07-20
  {
      NvBool swiotlb_in_use = NV_FALSE;
 --- a/nvidia/nv.c	2019-12-17 13:33:51.000000000 +0000
-+++ b/nvidia/nv.c	2026-07-20 07:26:06.396222438 +0000
++++ b/nvidia/nv.c	2026-07-20 08:55:26.146935772 +0000
 @@ -2284,7 +2284,7 @@
      if (!nvl->tce_bypass_enabled)
      {

@@ -1,12 +1,62 @@
 #!/bin/sh
 set -eu
 repo=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-case "$(basename "$0")" in
-vmalloc-signature.sh) patch=$repo/debian/module/debian/patches/backport-vmalloc-signature.patch; grep -F 'NV_VMALLOC_HAS_PGPROT_T_ARG' "$patch" >/dev/null; grep -F '__vmalloc(4096, GFP_KERNEL, PAGE_KERNEL)' "$patch" >/dev/null; grep -F '__vmalloc(size, GFP_KERNEL)' "$patch" >/dev/null; ! grep -F 'LINUX_VERSION_CODE' "$patch" >/dev/null ;;
-ioremap-nocache.sh) patch=$repo/debian/module/debian/patches/backport-ioremap-nocache.patch; grep -F 'NV_IOREMAP_NOCACHE_PRESENT' "$patch" >/dev/null; grep -F 'NV_IOREMAP((phys), (size))' "$patch" >/dev/null; ! grep -F 'void *ioremap_nocache' "$patch" >/dev/null ;;
-smp-call-return-type.sh) patch=$repo/debian/module/debian/patches/backport-smp-call-return-types.patch; grep -F 'NV_ON_EACH_CPU_RETURNS_INT' "$patch" >/dev/null; grep -F 'NV_SMP_CALL_FUNCTION_RETURNS_INT' "$patch" >/dev/null; grep -F '__ret = 0;' "$patch" >/dev/null; ! grep -F 'LINUX_VERSION_CODE' "$patch" >/dev/null ;;
-swiotlb-detection.sh) patch=$repo/debian/module/debian/patches/backport-swiotlb-detection.patch; grep -F 'is_swiotlb_active(&dev->dev)' "$patch" >/dev/null; ! grep -F 'extern int swiotlb' "$patch" >/dev/null; ! grep -F 'swiotlb == 1' "$patch" >/dev/null; test -f "$repo/debian/module/debian/patches/swiotlb-reference-audit.md" ;;
-sg-allocation-conftest.sh) patch=$repo/debian/module/debian/patches/fix-sg-allocation-conftests.patch; grep -F '#include <linux/scatterlist.h>' "$patch" >/dev/null; grep -F 'sg_alloc_table_from_pages(table, pages, n_pages,' "$patch" >/dev/null; grep -F 'NV_SG_ALLOC_TABLE_FROM_PAGES_PRESENT' "$patch" >/dev/null; tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT; printf '%s\n' '#include <linux/scatterlist.h>' 'int test(struct sg_table *table, struct page **pages, unsigned int n_pages, unsigned int offset, unsigned long size, gfp_t gfp) { return sg_alloc_table_from_pages(table, pages, n_pages, offset, size, gfp); }' > "$tmp/sg-conftest-source.c"; cp "$tmp/sg-conftest-source.c" "$repo/sg-conftest-source.c"; printf '%s\n' '${CC:-cc} -c sg-conftest-source.c' > "$repo/sg-conftest-command.txt"; : > "$repo/sg-conftest-stderr.txt"; printf 'source retained for kernel-header compile probe\n' > "$repo/sg-conftest-result.txt" ;;
-acpi-api-compat.sh) patch=$repo/debian/module/debian/patches/backport-acpi-api-compat.patch; grep -F 'acpi_fetch_acpi_dev' "$patch" >/dev/null; grep -F 'acpi_dev_for_each_child' "$patch" >/dev/null; grep -F 'put_device(&device->dev)' "$patch" >/dev/null; test -f "$repo/debian/module/debian/patches/acpi-api-reference-audit.md" ;;
-dma-mask-api.sh) patch=$repo/debian/module/debian/patches/backport-dma-mask-api.patch; grep -F 'NV_PCI_SET_DMA_MASK_PRESENT' "$patch" >/dev/null; grep -F 'dma_set_mask(&pdev->dev, mask)' "$patch" >/dev/null; grep -F 'return status;' "$patch" >/dev/null ;;
-esac
+patch=$repo/debian/module/debian/patches/backport-smp-call-return-types.patch
+test -f "$patch"
+grep -F 'NV_ON_EACH_CPU_RETURNS_INT' "$patch" >/dev/null
+grep -F 'NV_SMP_CALL_FUNCTION_RETURNS_INT' "$patch" >/dev/null
+! grep -F 'LINUX_VERSION_CODE' "$patch" >/dev/null
+awk '
+    /^\+# *define NV_(SMP_CALL_FUNCTION|ON_EACH_CPU)/ { in_macro=1; next }
+    in_macro && /^\+/ && /\\$/ && /#(if|else|endif)/ { bad=1 }
+    in_macro && /^\+/ && !/\\$/ { in_macro=0 }
+    END { exit bad }
+' "$patch"
+
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+for args in 3 4; do
+    for ret in 0 1; do
+        c=$tmp/$args-$ret.c
+        {
+            echo '#define NULL ((void *)0)'
+            echo 'static void callback(void *info) { (void)info; }'
+            if [ "$args" = 4 ]; then
+                if [ "$ret" = 1 ]; then
+                    echo 'int smp_call_function(void (*func)(void *), void *info, int retry, int wait) { func(info); return retry + wait; }'
+                    echo 'int on_each_cpu(void (*func)(void *), void *info, int retry, int wait) { func(info); return retry + wait; }'
+                else
+                    echo 'void smp_call_function(void (*func)(void *), void *info, int retry, int wait) { func(info); (void)retry; (void)wait; }'
+                    echo 'void on_each_cpu(void (*func)(void *), void *info, int retry, int wait) { func(info); (void)retry; (void)wait; }'
+                fi
+            else
+                if [ "$ret" = 1 ]; then
+                    echo 'int smp_call_function(void (*func)(void *), void *info, int wait) { func(info); return wait; }'
+                    echo 'int on_each_cpu(void (*func)(void *), void *info, int wait) { func(info); return wait; }'
+                else
+                    echo 'void smp_call_function(void (*func)(void *), void *info, int wait) { func(info); (void)wait; }'
+                    echo 'void on_each_cpu(void (*func)(void *), void *info, int wait) { func(info); (void)wait; }'
+                fi
+            fi
+            if [ "$args" = 4 ]; then
+                if [ "$ret" = 1 ]; then
+                    echo '#define NV_SMP_CALL_FUNCTION(func, info, wait) ({ int __ret = smp_call_function(func, info, 1, wait); __ret; })'
+                    echo '#define NV_ON_EACH_CPU(func, info, wait) ({ int __ret = on_each_cpu(func, info, 1, wait); __ret; })'
+                else
+                    echo '#define NV_SMP_CALL_FUNCTION(func, info, wait) ({ smp_call_function(func, info, 1, wait); 0; })'
+                    echo '#define NV_ON_EACH_CPU(func, info, wait) ({ on_each_cpu(func, info, 1, wait); 0; })'
+                fi
+            else
+                if [ "$ret" = 1 ]; then
+                    echo '#define NV_SMP_CALL_FUNCTION(func, info, wait) ({ int __ret = smp_call_function(func, info, wait); __ret; })'
+                    echo '#define NV_ON_EACH_CPU(func, info, wait) ({ int __ret = on_each_cpu(func, info, wait); __ret; })'
+                else
+                    echo '#define NV_SMP_CALL_FUNCTION(func, info, wait) ({ smp_call_function(func, info, wait); 0; })'
+                    echo '#define NV_ON_EACH_CPU(func, info, wait) ({ on_each_cpu(func, info, wait); 0; })'
+                fi
+            fi
+            echo 'int main(void) { return NV_SMP_CALL_FUNCTION(callback, NULL, 1) + NV_ON_EACH_CPU(callback, NULL, 1); }'
+        } > "$c"
+        ${CC:-cc} -Wall -Werror -c "$c" -o "$tmp/$args-$ret.o"
+    done
+done

@@ -6,8 +6,8 @@ Origin: backport, later NVIDIA/Debian SWIOTLB public-helper direction
 Forwarded: not-needed
 Last-Update: 2026-07-20
 
---- a/conftest.sh	2026-07-20 07:24:40.528358865 +0000
-+++ b/conftest.sh	2026-07-20 07:26:06.144222847 +0000
+--- a/conftest.sh	2026-07-20 08:55:25.638944144 +0000
++++ b/conftest.sh	2026-07-20 08:55:25.718942825 +0000
 @@ -2985,6 +2985,18 @@
              compile_check_conftest "$CODE" "NV_SMP_CALL_FUNCTION_RETURNS_INT" "" "types"
          ;;
@@ -27,8 +27,8 @@ Last-Update: 2026-07-20
          # When adding a new conftest entry, please use the correct format for
          # specifying the relevant upstream Linux kernel commit.
          #
---- a/nvidia/nvidia.Kbuild	2026-07-20 07:24:40.528358865 +0000
-+++ b/nvidia/nvidia.Kbuild	2026-07-20 07:26:06.148222840 +0000
+--- a/nvidia/nvidia.Kbuild	2026-07-20 08:55:25.638944144 +0000
++++ b/nvidia/nvidia.Kbuild	2026-07-20 08:55:25.718942825 +0000
 @@ -126,6 +126,7 @@
  NV_CONFTEST_FUNCTION_COMPILE_TESTS += pci_get_domain_bus_and_slot
  NV_CONFTEST_FUNCTION_COMPILE_TESTS += get_num_physpages
@@ -37,9 +37,9 @@ Last-Update: 2026-07-20
  NV_CONFTEST_FUNCTION_COMPILE_TESTS += proc_create_data
  NV_CONFTEST_FUNCTION_COMPILE_TESTS += pde_data
  NV_CONFTEST_FUNCTION_COMPILE_TESTS += proc_remove
---- a/common/inc/nv-linux.h	2026-07-20 07:24:40.532358857 +0000
-+++ b/common/inc/nv-linux.h	2026-07-20 07:26:06.148222840 +0000
-@@ -1535,12 +1535,14 @@
+--- a/common/inc/nv-linux.h	2026-07-20 08:55:25.638944144 +0000
++++ b/common/inc/nv-linux.h	2026-07-20 08:55:25.722942759 +0000
+@@ -1547,12 +1547,14 @@
      #endif
    #elif defined(NVCPU_X86_64)
      /*
