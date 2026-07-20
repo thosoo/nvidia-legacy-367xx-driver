@@ -1,13 +1,135 @@
-Description: replace removed pci_set_dma_mask with device DMA helper fallback
- Keep the 367.134 streaming DMA-mask semantics and return-code handling while
- compiling on kernels that no longer declare pci_set_dma_mask().
-Origin: backport, NVIDIA 470.129.06 pci/dma compatibility direction
+Description: backport generic DMA mapping API compatibility
+ Replace removed PCI DMA mapping aliases with centralized wrappers that use
+ generic device DMA helpers when the legacy PCI alias family is unavailable.
+Origin: backport, Linux generic DMA API compatibility adapted to NVIDIA 367.134
 Forwarded: not-needed
 Last-Update: 2026-07-20
 
---- a/conftest.sh	2026-07-20 09:36:41.902356806 +0000
-+++ b/conftest.sh	2026-07-20 09:36:42.402354564 +0000
-@@ -3050,6 +3050,18 @@
+--- a/conftest.sh	2026-07-20 13:27:42.940566929 +0000
++++ b/conftest.sh	2026-07-20 13:27:43.860569850 +0000
+@@ -1208,43 +1208,97 @@
+ 
+       pci_dma_mapping_error)
+             #
+-            # Determine how many arguments pci_dma_mapping_error()
+-            # takes.
++            # Determine whether the legacy PCI DMA mapping API family used by
++            # 367.134 is declared.  The old probe called pci_dma_mapping_error()
++            # directly; on modern kernels that undeclared call could still create
++            # an object because implicit declarations were warnings in the probe
++            # environment.  Compile this family with implicit declarations as
++            # hard errors and only test mapping-error arity after declaration is
++            # established.
+             #
+-            echo "$CONFTEST_PREAMBLE
+-            #include <linux/pci.h>
+-            int conftest_pci_dma_mapping_error(void) {
+-                return pci_dma_mapping_error(NULL, 0);
+-            }" > conftest$$.c
++            pci_dma_diag_dir="conftest-pci-dma-diagnostics"
++            mkdir -p "$pci_dma_diag_dir"
+ 
+-            $CC $CFLAGS -c conftest$$.c > /dev/null 2>&1
+-            rm -f conftest$$.c
++            nv_pci_dma_compile_probe()
++            {
++                name="$1"
++                code="$2"
++                src="conftest$$-${name}.c"
++                obj="conftest$$-${name}.o"
++                stdout="$pci_dma_diag_dir/${name}.stdout.txt"
++                stderr="$pci_dma_diag_dir/${name}.stderr.txt"
+ 
+-            if [ -f conftest$$.o ]; then
++                echo "$CONFTEST_PREAMBLE
++                $code" > "$src"
++                cp "$src" "$pci_dma_diag_dir/${name}.source.c"
++                printf '%s\n' "$CC $CFLAGS -Werror=implicit-function-declaration -c $src -o $obj" > "$pci_dma_diag_dir/${name}.command.txt"
++                pwd > "$pci_dma_diag_dir/${name}.cwd.txt"
++                printf '%s\n' "$CC" > "$pci_dma_diag_dir/${name}.compiler.txt"
++
++                $CC $CFLAGS -Werror=implicit-function-declaration -c "$src" -o "$obj" > "$stdout" 2> "$stderr"
++                status=$?
++                printf '%s\n' "$status" > "$pci_dma_diag_dir/${name}.exit.txt"
++                if [ -f "$obj" ]; then
++                    echo yes > "$pci_dma_diag_dir/${name}.object-created.txt"
++                    rm -f "$obj"
++                else
++                    echo no > "$pci_dma_diag_dir/${name}.object-created.txt"
++                fi
++                rm -f "$src"
++                return "$status"
++            }
++
++            CODE="
++            #include <linux/pci.h>
++            #include <linux/scatterlist.h>
++            #include <linux/dma-mapping.h>
++            void conftest_pci_dma_mapping_api(struct pci_dev *pdev,
++                                              struct page *page,
++                                              struct scatterlist *sgl,
++                                              dma_addr_t dma_addr)
++            {
++                dma_addr_t page_addr;
++                int sg_count;
++                int err;
++                page_addr = pci_map_page(pdev, page, 0, 4096, PCI_DMA_BIDIRECTIONAL);
++                pci_unmap_page(pdev, page_addr, 4096, PCI_DMA_BIDIRECTIONAL);
++                sg_count = pci_map_sg(pdev, sgl, 1, PCI_DMA_BIDIRECTIONAL);
++                pci_unmap_sg(pdev, sgl, sg_count, PCI_DMA_BIDIRECTIONAL);
++                err = pci_dma_mapping_error(pdev, dma_addr);
++                (void)err;
++            }"
++            if nv_pci_dma_compile_probe "legacy-family" "$CODE"; then
++                echo "#define NV_PCI_DMA_MAPPING_API_PRESENT" | append_conftest "functions"
+                 echo "#define NV_PCI_DMA_MAPPING_ERROR_PRESENT" | append_conftest "functions"
+                 echo "#define NV_PCI_DMA_MAPPING_ERROR_ARGUMENT_COUNT 2" | append_conftest "functions"
+-                rm -f conftest$$.o
++                printf '%s\n' "legacy" > "$pci_dma_diag_dir/selected-implementation.txt"
++                printf '%s\n' "#define NV_PCI_DMA_MAPPING_API_PRESENT" "#define NV_PCI_DMA_MAPPING_ERROR_PRESENT" "#define NV_PCI_DMA_MAPPING_ERROR_ARGUMENT_COUNT 2" > "$pci_dma_diag_dir/definitions.txt"
+                 return
+             fi
+ 
+-            echo "$CONFTEST_PREAMBLE
++            CODE="
+             #include <linux/pci.h>
+-            int conftest_pci_dma_mapping_error(void) {
+-                return pci_dma_mapping_error(0);
+-            }" > conftest$$.c
+-
+-            $CC $CFLAGS -c conftest$$.c > /dev/null 2>&1
+-            rm -f conftest$$.c
+-
+-            if [ -f conftest$$.o ]; then
++            #include <linux/dma-mapping.h>
++            int conftest_pci_dma_mapping_error_one_arg(dma_addr_t dma_addr)
++            {
++                int (*fn)(dma_addr_t) = pci_dma_mapping_error;
++                return fn(dma_addr);
++            }"
++            if nv_pci_dma_compile_probe "mapping-error-one-arg" "$CODE"; then
+                 echo "#define NV_PCI_DMA_MAPPING_ERROR_PRESENT" | append_conftest "functions"
+                 echo "#define NV_PCI_DMA_MAPPING_ERROR_ARGUMENT_COUNT 1" | append_conftest "functions"
+-                rm -f conftest$$.o
+-                return
+-            else
+-                echo "#error pci_dma_mapping_error() conftest failed!" | append_conftest "functions"
++                echo "#undef NV_PCI_DMA_MAPPING_API_PRESENT" | append_conftest "functions"
++                printf '%s\n' "generic" > "$pci_dma_diag_dir/selected-implementation.txt"
++                printf '%s\n' "#undef NV_PCI_DMA_MAPPING_API_PRESENT" "#define NV_PCI_DMA_MAPPING_ERROR_PRESENT" "#define NV_PCI_DMA_MAPPING_ERROR_ARGUMENT_COUNT 1" > "$pci_dma_diag_dir/definitions.txt"
+                 return
+             fi
++
++            echo "#undef NV_PCI_DMA_MAPPING_API_PRESENT" | append_conftest "functions"
++            echo "#undef NV_PCI_DMA_MAPPING_ERROR_PRESENT" | append_conftest "functions"
++            echo "#undef NV_PCI_DMA_MAPPING_ERROR_ARGUMENT_COUNT" | append_conftest "functions"
++            printf '%s\n' "generic" > "$pci_dma_diag_dir/selected-implementation.txt"
++            printf '%s\n' "#undef NV_PCI_DMA_MAPPING_API_PRESENT" "#undef NV_PCI_DMA_MAPPING_ERROR_PRESENT" "#undef NV_PCI_DMA_MAPPING_ERROR_ARGUMENT_COUNT" > "$pci_dma_diag_dir/definitions.txt"
++            return
+         ;;
+ 
+         scatterlist)
+@@ -3050,6 +3104,18 @@
              compile_check_conftest "$CODE" "NV_ACPI_DEVICE_HAS_CHILDREN_AND_NODE" "" "types"
          ;;
  
@@ -26,8 +148,8 @@ Last-Update: 2026-07-20
          # When adding a new conftest entry, please use the correct format for
          # specifying the relevant upstream Linux kernel commit.
          #
---- a/nvidia/nvidia.Kbuild	2026-07-20 09:36:41.902356806 +0000
-+++ b/nvidia/nvidia.Kbuild	2026-07-20 09:36:42.402354564 +0000
+--- a/nvidia/nvidia.Kbuild	2026-07-20 13:27:42.940566929 +0000
++++ b/nvidia/nvidia.Kbuild	2026-07-20 13:27:43.864569862 +0000
 @@ -121,6 +121,7 @@
  NV_CONFTEST_FUNCTION_COMPILE_TESTS += acpi_device_has_children_and_node
  NV_CONFTEST_FUNCTION_COMPILE_TESTS += pci_domain_nr
@@ -36,9 +158,83 @@ Last-Update: 2026-07-20
  NV_CONFTEST_FUNCTION_COMPILE_TESTS += sg_alloc_table
  #### Disabled for Debian legacy-367xx: no matching 367.134 conftest case.
  #NV_CONFTEST_FUNCTION_COMPILE_TESTS += sg_init_table
---- a/common/inc/nv-linux.h	2026-07-20 09:36:41.890356860 +0000
-+++ b/common/inc/nv-linux.h	2026-07-20 09:36:42.402354564 +0000
-@@ -1485,6 +1485,15 @@
+--- a/common/inc/nv-linux.h	2026-07-20 13:27:42.920566865 +0000
++++ b/common/inc/nv-linux.h	2026-07-20 13:27:43.864569862 +0000
+@@ -333,19 +333,63 @@
+ #endif
+ #endif
+ 
+-#if defined(NV_PCI_DMA_MAPPING_ERROR_PRESENT)
+-#if (NV_PCI_DMA_MAPPING_ERROR_ARGUMENT_COUNT == 2)
+-#define NV_PCI_DMA_MAPPING_ERROR(dev, addr) \
+-    pci_dma_mapping_error(dev, addr)
+-#elif (NV_PCI_DMA_MAPPING_ERROR_ARGUMENT_COUNT == 1)
+-#define NV_PCI_DMA_MAPPING_ERROR(dev, addr) \
+-    pci_dma_mapping_error(addr)
++#if defined(NV_PCI_DMA_MAPPING_API_PRESENT)
++#define NV_DMA_BIDIRECTIONAL PCI_DMA_BIDIRECTIONAL
+ #else
+-#error "NV_PCI_DMA_MAPPING_ERROR_ARGUMENT_COUNT value unrecognized!"
++#define NV_DMA_BIDIRECTIONAL DMA_BIDIRECTIONAL
+ #endif
+-#elif defined(NV_VM_INSERT_PAGE_PRESENT)
+-#error "NV_PCI_DMA_MAPPING_ERROR() undefined!"
++
++static inline dma_addr_t nv_dma_map_page(struct pci_dev *pdev, struct page *page,
++                                         unsigned long offset, size_t size)
++{
++#if defined(NV_PCI_DMA_MAPPING_API_PRESENT)
++    return pci_map_page(pdev, page, offset, size, NV_DMA_BIDIRECTIONAL);
++#else
++    return dma_map_page(&pdev->dev, page, offset, size, NV_DMA_BIDIRECTIONAL);
+ #endif
++}
++
++static inline void nv_dma_unmap_page(struct pci_dev *pdev, dma_addr_t addr,
++                                     size_t size)
++{
++#if defined(NV_PCI_DMA_MAPPING_API_PRESENT)
++    pci_unmap_page(pdev, addr, size, NV_DMA_BIDIRECTIONAL);
++#else
++    dma_unmap_page(&pdev->dev, addr, size, NV_DMA_BIDIRECTIONAL);
++#endif
++}
++
++static inline int nv_dma_map_sg(struct pci_dev *pdev, struct scatterlist *sgl,
++                                int nents)
++{
++#if defined(NV_PCI_DMA_MAPPING_API_PRESENT)
++    return pci_map_sg(pdev, sgl, nents, NV_DMA_BIDIRECTIONAL);
++#else
++    return dma_map_sg(&pdev->dev, sgl, nents, NV_DMA_BIDIRECTIONAL);
++#endif
++}
++
++static inline void nv_dma_unmap_sg(struct pci_dev *pdev, struct scatterlist *sgl,
++                                   int nents)
++{
++#if defined(NV_PCI_DMA_MAPPING_API_PRESENT)
++    pci_unmap_sg(pdev, sgl, nents, NV_DMA_BIDIRECTIONAL);
++#else
++    dma_unmap_sg(&pdev->dev, sgl, nents, NV_DMA_BIDIRECTIONAL);
++#endif
++}
++
++static inline int nv_dma_mapping_error(struct pci_dev *pdev, dma_addr_t addr)
++{
++#if defined(NV_PCI_DMA_MAPPING_API_PRESENT)
++    return pci_dma_mapping_error(pdev, addr);
++#elif defined(NV_PCI_DMA_MAPPING_ERROR_PRESENT) && \
++      (NV_PCI_DMA_MAPPING_ERROR_ARGUMENT_COUNT == 1)
++    return pci_dma_mapping_error(addr);
++#else
++    return dma_mapping_error(&pdev->dev, addr);
++#endif
++}
+ 
+ #if defined(NV_LINUX_ACPI_EVENTS_SUPPORTED)
+ #if (NV_ACPI_WALK_NAMESPACE_ARGUMENT_COUNT == 6)
+@@ -1485,6 +1529,15 @@
      return flags;
  }
  
@@ -55,7 +251,7 @@ Last-Update: 2026-07-20
  {
      NvBool swiotlb_in_use = NV_FALSE;
 --- a/nvidia/nv.c	2019-12-17 13:33:51.000000000 +0000
-+++ b/nvidia/nv.c	2026-07-20 09:36:42.402354564 +0000
++++ b/nvidia/nv.c	2026-07-20 13:27:43.868569875 +0000
 @@ -2284,7 +2284,7 @@
      if (!nvl->tce_bypass_enabled)
      {
@@ -74,7 +270,7 @@ Last-Update: 2026-07-20
       */
      nvl = NV_GET_NVL_FROM_NV_STATE(nv);
      if ((nv_tce_bypass_mode == NV_TCE_BYPASS_MODE_DISABLE) ||
-@@ -3773,7 +3773,7 @@
+@@ -3773,19 +3773,19 @@
       * as the starting address for all DMA mappings.
       */
      saved_dma_mask = dev->dma_mask;
@@ -83,15 +279,22 @@ Last-Update: 2026-07-20
      {
          goto done;
      }
-@@ -3781,7 +3781,7 @@
-     dma_addr = pci_map_single(dev, NULL, 1, DMA_BIDIRECTIONAL);
-     if (pci_dma_mapping_error(dev, dma_addr))
+ 
+-    dma_addr = pci_map_single(dev, NULL, 1, DMA_BIDIRECTIONAL);
+-    if (pci_dma_mapping_error(dev, dma_addr))
++    dma_addr = dma_map_single(&dev->dev, NULL, 1, DMA_BIDIRECTIONAL);
++    if (dma_mapping_error(&dev->dev, dma_addr))
      {
 -        pci_set_dma_mask(dev, saved_dma_mask);
 +        nv_pci_set_dma_mask(dev, saved_dma_mask);
          goto done;
      }
  
+-    pci_unmap_single(dev, dma_addr, 1, DMA_BIDIRECTIONAL);
++    dma_unmap_single(&dev->dev, dma_addr, 1, DMA_BIDIRECTIONAL);
+ 
+     /*
+      * From IBM: "For IODA2, native DMA bypass or KVM TCE-based implementation
 @@ -3817,7 +3817,7 @@
           */
          nv_printf(NV_DBG_WARNINGS,
@@ -110,3 +313,54 @@ Last-Update: 2026-07-20
              goto done;
          }
      }
+--- a/nvidia/nv-dma.c	2019-12-17 13:33:51.000000000 +0000
++++ b/nvidia/nv-dma.c	2026-07-20 13:27:43.864569862 +0000
+@@ -27,9 +27,9 @@
+     NvU64 *va
+ )
+ {
+-    *va = pci_map_page(dma_map->dev, dma_map->pages[0], 0,
+-            dma_map->page_count * PAGE_SIZE, PCI_DMA_BIDIRECTIONAL);
+-    if (NV_PCI_DMA_MAPPING_ERROR(dma_map->dev, *va))
++    *va = nv_dma_map_page(dma_map->dev, dma_map->pages[0], 0,
++            dma_map->page_count * PAGE_SIZE);
++    if (nv_dma_mapping_error(dma_map->dev, *va))
+     {
+         return NV_ERR_OPERATING_SYSTEM;
+     }
+@@ -57,8 +57,8 @@
+ 
+ static void nv_dma_unmap_contig(nv_dma_map_t *dma_map)
+ {
+-    pci_unmap_page(dma_map->dev, dma_map->mapping.contig.dma_addr,
+-            dma_map->page_count * PAGE_SIZE, PCI_DMA_BIDIRECTIONAL);
++    nv_dma_unmap_page(dma_map->dev, dma_map->mapping.contig.dma_addr,
++            dma_map->page_count * PAGE_SIZE);
+ }
+ 
+ static void nv_fill_scatterlist
+@@ -166,10 +166,9 @@
+ 
+     NV_FOR_EACH_DMA_SUBMAP(dma_map, submap, i)
+     {
+-        submap->sg_map_count = pci_map_sg(dma_map->dev,
++        submap->sg_map_count = nv_dma_map_sg(dma_map->dev,
+                 NV_DMA_SUBMAP_SCATTERLIST(submap),
+-                NV_DMA_SUBMAP_SCATTERLIST_LENGTH(submap),
+-                PCI_DMA_BIDIRECTIONAL);
++                NV_DMA_SUBMAP_SCATTERLIST_LENGTH(submap));
+         if (submap->sg_map_count == 0)
+         {
+             status = NV_ERR_OPERATING_SYSTEM;
+@@ -197,9 +196,8 @@
+             break;
+         }
+ 
+-        pci_unmap_sg(dma_map->dev, NV_DMA_SUBMAP_SCATTERLIST(submap),
+-                NV_DMA_SUBMAP_SCATTERLIST_LENGTH(submap),
+-                PCI_DMA_BIDIRECTIONAL);
++        nv_dma_unmap_sg(dma_map->dev, NV_DMA_SUBMAP_SCATTERLIST(submap),
++                NV_DMA_SUBMAP_SCATTERLIST_LENGTH(submap));
+     }
+ }
+ 

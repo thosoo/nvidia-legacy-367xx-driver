@@ -351,6 +351,16 @@ set +e
     else
         echo "no SG conftest diagnostics directory" > /work/logs/conftest-sg-diagnostics-files.txt
     fi
+    if test -d "$module_source/conftest-pci-dma-diagnostics"; then
+        mkdir -p /work/logs/conftest-pci-dma-diagnostics
+        find "$module_source/conftest-pci-dma-diagnostics" -type f \
+            ! -name '*.o' ! -name '*.ko' ! -name '*.cmd' \
+            -exec cp -v {} /work/logs/conftest-pci-dma-diagnostics/ \; \
+            > /work/logs/conftest-pci-dma-diagnostics-files.txt 2>&1 || \
+            echo "copy PCI DMA conftest diagnostics failed" >> /work/logs/post-build-diagnostics-failures.txt
+    else
+        echo "no PCI DMA conftest diagnostics directory" > /work/logs/conftest-pci-dma-diagnostics-files.txt
+    fi
     if test -e glvnd/nvidia_icd.json && test -e nonglvnd/nvidia_icd.json; then
         sh tests/vulkan-icd-json.sh . > /work/logs/vulkan-icd-json.log 2>&1
         vulkan_icd_status=$?
