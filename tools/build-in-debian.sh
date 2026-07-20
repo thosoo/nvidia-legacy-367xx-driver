@@ -192,86 +192,136 @@ if [ "$binary_status" -ne 0 ]; then
     printf '%s\n' "$current_stage" > /work/logs/failed-stage.txt
 fi
 
-find /work/binary-source -type f -name '*.rej' -print > /work/logs/quilt-reject-files.txt || true
-# Capture production module quilt rejects before running audit replay.
-sh /work/binary-source/tools/collect-module-rejects.sh \
-    /work/binary-source \
-    /work/logs || true
-if test -d /work/binary-source/build/kernel; then
-    sh /work/binary-source/tools/audit-module-series.sh \
-        /work/binary-source/build/kernel \
-        /work/logs/module-patch-audit || true
-fi
+set +e
+: > /work/logs/post-build-diagnostics-failures.txt
 {
-    if test -d /work/binary-source/kernel-source-tree; then
-        cd /work/binary-source/kernel-source-tree
-        QUILT_PATCHES=../debian/module/debian/patches quilt applied 2>&1 || true
-    else
-        echo "kernel-source-tree not created"
-    fi
-} > /work/logs/module-quilt-applied.txt
-{
-    if test -d /work/binary-source/kernel-source-tree; then
-        cd /work/binary-source/kernel-source-tree
-        QUILT_PATCHES=../debian/module/debian/patches quilt unapplied 2>&1 || true
-    else
-        echo "kernel-source-tree not created"
-    fi
-} > /work/logs/module-quilt-unapplied.txt
-cat /work/logs/module-quilt-applied.txt /work/logs/module-quilt-unapplied.txt > /work/logs/module-quilt-state.txt
-awk 'NF { print; exit }' /work/logs/module-quilt-unapplied.txt \
-    > /work/logs/module-quilt-failed-patch.txt || true
-# Refresh the reject snapshot after recording quilt state, without depending on
-audit-generated reject files.
-sh /work/binary-source/tools/collect-module-rejects.sh \
-    /work/binary-source \
-    /work/logs || true
-if test -f /work/binary-source/copyright.tmp && test -f /work/binary-source/LICENSE.tmp; then
-    diff -w /work/binary-source/copyright.tmp /work/binary-source/LICENSE.tmp \
-        > /work/logs/license-comparison-excerpt.txt || true
-fi
-{
-    QUILT_PATCHES=debian/patches QUILT_SERIES=series-postunpack quilt applied 2>&1 || true
-    echo '--- unapplied ---'
-    QUILT_PATCHES=debian/patches QUILT_SERIES=series-postunpack quilt unapplied 2>&1 || true
-} > /work/logs/quilt-state.txt
-: > /work/logs/quilt-reject-contents.txt
-while IFS= read -r reject; do
-    test -n "$reject" || continue
-    {
-        printf '\n===== %s =====\n' "$reject"
-        cat "$reject"
-    } >> /work/logs/quilt-reject-contents.txt
-done < /work/logs/quilt-reject-files.txt
+    PS4='+diagnostics:${LINENO}: '
+    set -x
 
-grep -n -E 'kernel-source-tree|CC \[M\]|CONFTEST|nvidia-uvm|nvidia-drm|nvidia-modeset|nv-linux' /work/logs/binary-build.log > /work/logs/kernel-build-progress.txt || true
-if test -d /work/binary-source/kernel-source-tree; then
-    echo yes > /work/logs/kernel-source-tree-created.txt
-else
-    echo no > /work/logs/kernel-source-tree-created.txt
-fi
-if test -d /work/binary-source/kernel-source-tree &&
-   grep -Eq '(^|[[:space:]])(CC|LD)[[:space:]]+\[M\]|MODPOST|make .* -C /lib/modules/.*/build' /work/logs/binary-build.log
-then
-    echo yes > /work/logs/kernel-compilation-reached.txt
-else
-    echo no > /work/logs/kernel-compilation-reached.txt
-fi
-grep -n -C 8 -E 'error:|fatal error:|implicit declaration|incompatible pointer|No such file|treated as errors' /work/logs/binary-build.log > /work/logs/kernel-build-excerpt.txt || true
-if test -e glvnd/nvidia_icd.json && test -e nonglvnd/nvidia_icd.json; then
-    set +e
-    sh tests/vulkan-icd-json.sh . > /work/logs/vulkan-icd-json.log 2>&1
-    vulkan_icd_status=$?
-    set -e
-    cat /work/logs/vulkan-icd-json.log
-    printf '%s\n' "$vulkan_icd_status" > /work/logs/vulkan-icd-json.exit
-    if [ "$binary_status" -eq 0 ]; then
-        test "$vulkan_icd_status" -eq 0
+    find /work/binary-source -type f -name '*.rej' -print > /work/logs/quilt-reject-files.txt || \
+        echo "find quilt rejects failed" >> /work/logs/post-build-diagnostics-failures.txt
+    # Capture production module quilt rejects before running audit replay.
+    sh /work/binary-source/tools/collect-module-rejects.sh \
+        /work/binary-source \
+        /work/logs || echo "collect module rejects before audit failed" >> /work/logs/post-build-diagnostics-failures.txt
+    if test -d /work/binary-source/build/kernel; then
+        sh /work/binary-source/tools/audit-module-series.sh \
+            /work/binary-source/build/kernel \
+            /work/logs/module-patch-audit || echo "module series audit failed" >> /work/logs/post-build-diagnostics-failures.txt
     fi
-fi
+    if test -d /work/binary-source/kernel-source-tree; then
+        (
+            cd /work/binary-source/kernel-source-tree || exit
+            QUILT_PATCHES=../debian/module/debian/patches quilt applied 2>&1 || true
+        ) > /work/logs/module-quilt-applied.txt
+        (
+            cd /work/binary-source/kernel-source-tree || exit
+            QUILT_PATCHES=../debian/module/debian/patches quilt unapplied 2>&1 || true
+        ) > /work/logs/module-quilt-unapplied.txt
+    else
+        echo "kernel-source-tree not created" > /work/logs/module-quilt-applied.txt
+        echo "kernel-source-tree not created" > /work/logs/module-quilt-unapplied.txt
+    fi
+    cat /work/logs/module-quilt-applied.txt /work/logs/module-quilt-unapplied.txt > /work/logs/module-quilt-state.txt
+    if grep -qi 'fully applied' /work/logs/module-quilt-unapplied.txt; then
+        echo yes > /work/logs/module-quilt-series-complete.txt
+        echo none > /work/logs/module-quilt-failed-patch.txt
+    else
+        echo no > /work/logs/module-quilt-series-complete.txt
+        awk 'NF { print; exit }' /work/logs/module-quilt-unapplied.txt \
+            > /work/logs/module-quilt-failed-patch.txt || true
+        test -s /work/logs/module-quilt-failed-patch.txt || echo none > /work/logs/module-quilt-failed-patch.txt
+    fi
+    # Refresh the reject snapshot after recording quilt state, without depending on
+    # audit-generated reject files.
+    sh /work/binary-source/tools/collect-module-rejects.sh \
+        /work/binary-source \
+        /work/logs || echo "collect module rejects after quilt state failed" >> /work/logs/post-build-diagnostics-failures.txt
+    if test -f /work/binary-source/copyright.tmp && test -f /work/binary-source/LICENSE.tmp; then
+        diff -w /work/binary-source/copyright.tmp /work/binary-source/LICENSE.tmp \
+            > /work/logs/license-comparison-excerpt.txt || true
+    fi
+    (
+        cd /work/binary-source || exit
+        QUILT_PATCHES=debian/patches QUILT_SERIES=series-postunpack quilt applied 2>&1 || true
+        echo '--- unapplied ---'
+        QUILT_PATCHES=debian/patches QUILT_SERIES=series-postunpack quilt unapplied 2>&1 || true
+    ) > /work/logs/quilt-state.txt
+    : > /work/logs/quilt-reject-contents.txt
+    while IFS= read -r reject; do
+        test -n "$reject" || continue
+        {
+            printf '\n===== %s =====\n' "$reject"
+            cat "$reject"
+        } >> /work/logs/quilt-reject-contents.txt
+    done < /work/logs/quilt-reject-files.txt
 
-set_stage collect-results
-find /work -maxdepth 1 -type f \( -name '*.deb' -o -name '*.dsc' -o -name '*.changes' -o -name '*.buildinfo' \) -printf '%f\n' | sort > /work/logs/binary-package-list.txt
-find /work -maxdepth 1 -type f \( -name '*.deb' -o -name '*.dsc' -o -name '*.changes' -o -name '*.buildinfo' \) -exec cp -v {} /work/artifacts/ \; >> /work/logs/binary-package-list.txt || true
+    grep -n -E 'kernel-source-tree|CC \[M\]|LD \[M\]|MODPOST|CONFTEST|nvidia-uvm|nvidia-drm|nvidia-modeset|nv-linux|make .* -C /lib/modules' /work/logs/binary-build.log > /work/logs/kernel-build-progress.txt || true
+    grep -n -C 50 -E 'error:|fatal error:|implicit declaration|incompatible pointer|No such file|treated as errors' /work/logs/binary-build.log > /work/logs/kernel-build-excerpt.txt || true
+
+    module_source=/work/binary-source/kernel-source-tree
+    printf '%s\n' /work/binary-source > /work/logs/module-make-caller-pwd.txt
+    printf '%s\n' "$module_source" > /work/logs/module-make-caller-curdir.txt
+    printf '%s\n' "$module_source" > /work/logs/module-make-source-directory.txt
+    grep -m1 -E 'make .* -C /lib/modules|/usr/bin/make .* -C /lib/modules' /work/logs/binary-build.log > /work/logs/module-kbuild-command.txt || true
+    sed -n 's/.*[[:space:]]M=\([^[:space:]]*\).*/\1/p' /work/logs/module-kbuild-command.txt | head -n 1 > /work/logs/module-kbuild-M-value.txt || true
+    test -s /work/logs/module-kbuild-M-value.txt || echo unknown > /work/logs/module-kbuild-M-value.txt
+    if grep -Fx /work/binary-source /work/logs/module-kbuild-M-value.txt >/dev/null; then
+        echo "module Kbuild M= points at package root instead of kernel-source-tree" >> /work/logs/post-build-diagnostics-failures.txt
+    fi
+    if test -d "$module_source"; then
+        echo yes > /work/logs/kernel-source-tree-created.txt
+    else
+        echo no > /work/logs/kernel-source-tree-created.txt
+    fi
+    if grep -qi 'fully applied' /work/logs/module-quilt-unapplied.txt; then
+        echo yes > /work/logs/module-series-applied.txt
+    else
+        echo no > /work/logs/module-series-applied.txt
+    fi
+    if grep -Eq 'make .* -C /lib/modules/.*/(build|source)|/usr/bin/make .* -C /lib/modules' /work/logs/binary-build.log; then
+        echo yes > /work/logs/kernel-kbuild-invoked.txt
+    else
+        echo no > /work/logs/kernel-kbuild-invoked.txt
+    fi
+    if grep -Eq '(^|[[:space:]])CC[[:space:]]+\[M\]' /work/logs/binary-build.log; then
+        echo yes > /work/logs/module-c-compiler-reached.txt
+    else
+        echo no > /work/logs/module-c-compiler-reached.txt
+    fi
+    if grep -Eq '(^|[[:space:]])LD[[:space:]]+\[M\]' /work/logs/binary-build.log; then
+        echo yes > /work/logs/module-linker-reached.txt
+    else
+        echo no > /work/logs/module-linker-reached.txt
+    fi
+    if grep -Eq '(^|[[:space:]])MODPOST([[:space:]]|$)' /work/logs/binary-build.log; then
+        echo yes > /work/logs/modpost-reached.txt
+    else
+        echo no > /work/logs/modpost-reached.txt
+    fi
+    if grep -Eq 'yes' /work/logs/module-c-compiler-reached.txt /work/logs/module-linker-reached.txt /work/logs/modpost-reached.txt; then
+        echo yes > /work/logs/kernel-compilation-reached.txt
+    else
+        echo no > /work/logs/kernel-compilation-reached.txt
+    fi
+    if test -e glvnd/nvidia_icd.json && test -e nonglvnd/nvidia_icd.json; then
+        sh tests/vulkan-icd-json.sh . > /work/logs/vulkan-icd-json.log 2>&1
+        vulkan_icd_status=$?
+        cat /work/logs/vulkan-icd-json.log
+        printf '%s\n' "$vulkan_icd_status" > /work/logs/vulkan-icd-json.exit
+        if [ "$binary_status" -eq 0 ] && [ "$vulkan_icd_status" -ne 0 ]; then
+            echo "vulkan ICD validation failed" >> /work/logs/post-build-diagnostics-failures.txt
+        fi
+    fi
+
+    set_stage collect-results
+    find /work -maxdepth 1 -type f \( -name '*.deb' -o -name '*.dsc' -o -name '*.changes' -o -name '*.buildinfo' \) -printf '%f\n' | sort > /work/logs/binary-package-list.txt || \
+        echo "binary package listing failed" >> /work/logs/post-build-diagnostics-failures.txt
+    find /work -maxdepth 1 -type f \( -name '*.deb' -o -name '*.dsc' -o -name '*.changes' -o -name '*.buildinfo' \) -exec cp -v {} /work/artifacts/ \; >> /work/logs/binary-package-list.txt || true
+    set +x
+} > /work/logs/post-build-diagnostics.trace.txt 2>&1
+diagnostics_status=$?
+printf '%s\n' "$diagnostics_status" > /work/logs/post-build-diagnostics.exit
+set -e
 
 exit "$binary_status"

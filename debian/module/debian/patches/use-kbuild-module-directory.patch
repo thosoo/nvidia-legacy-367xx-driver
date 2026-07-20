@@ -1,0 +1,19 @@
+Author: OpenAI Codex
+Description: use GNU make CURDIR for external module directory
+ When the NVIDIA module Makefile is entered through "make -C
+ kernel-source-tree", GNU make updates CURDIR to the directory containing the
+ module Makefile, while an imported PWD variable may still name the caller's
+ parent directory. Use CURDIR for Kbuild's M= argument so the kernel build reads
+ kernel-source-tree/Makefile and Kbuild.
+
+--- a/Makefile
++++ b/Makefile
+@@ -72,7 +72,7 @@ else
+   NV_VERBOSE ?=
+ 
+   KBUILD_PARAMS += KBUILD_VERBOSE=$(NV_VERBOSE)
+-  KBUILD_PARAMS += -C $(KERNEL_SOURCES) M=$(PWD)
++  KBUILD_PARAMS += -C $(KERNEL_SOURCES) M=$(CURDIR)
+   KBUILD_PARAMS += ARCH=$(ARCH)
+   KBUILD_PARAMS += NV_KERNEL_SOURCES=$(KERNEL_SOURCES)
+   KBUILD_PARAMS += NV_KERNEL_OUTPUT=$(KERNEL_OUTPUT)

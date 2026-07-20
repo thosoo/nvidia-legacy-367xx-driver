@@ -16,6 +16,8 @@ jobs:
       - run: tests/supported-pci-ids.sh
       - run: tests/module-reject-collector.sh
       - run: tests/target-series-bookworm-trixie.sh
+      - run: tests/kbuild-module-directory.sh
+      - run: tests/post-build-diagnostics-status.sh
       - run: test -z "$(git status --porcelain)"
   bookworm-package:
     name: bookworm-package

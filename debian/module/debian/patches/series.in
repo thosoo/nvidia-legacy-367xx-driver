@@ -66,6 +66,7 @@ do-div-cast.patch
 
 # build system updates
 conftest-verbose.patch
+use-kbuild-module-directory.patch
 use-kbuild-compiler.patch
 use-kbuild-flags.patch
 nvidia-use-ARCH.o_binary.patch
