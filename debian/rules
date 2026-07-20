@@ -125,6 +125,7 @@ deps_nvidia_kmod_binary	+= $${nvidia-kernel}-$${nvidia:Version} |
 deps_nvidia_kmod_source	 = $${nvidia-kernel}-dkms (>= $${nvidia:Version}) |
 deps_nvidia_kmod_source	+= $${nvidia-kernel}-source (>= $${nvidia:Version}) |
 
+kmod_tested_description = $(if $(strip $(or $(LINUX_KMOD_TESTED_$(DEB_HOST_ARCH)),$(LINUX_KMOD_TESTED))),Kernel module compatibility has been tested through Linux $(strip $(or $(LINUX_KMOD_TESTED_$(DEB_HOST_ARCH)),$(LINUX_KMOD_TESTED))).,Compatibility with current Debian kernels has not yet been validated.)
 
 .PHONY: autogen prepare patch
 autogen: debian/control $(AUTOGEN)
@@ -153,17 +154,19 @@ endif
 	ls -al
 	touch $@
 
-nvidia_icd.json.template	 = NVIDIA-Linux/nvidia_icd.json.template
-$(nvidia_icd.json.template): unpack-stamp
-glvnd/nvidia_icd.json: $(nvidia_icd.json.template)
+upstream_nvidia_icd_template	 = NVIDIA-Linux/nvidia_icd.json.template
+packaging_nvidia_icd_template	 = debian/nvidia_icd.json.template
+nvidia_icd_template = $$(if test -f "$(upstream_nvidia_icd_template)"; then printf '%s\n' "$(upstream_nvidia_icd_template)"; else printf '%s\n' "$(packaging_nvidia_icd_template)"; fi)
+$(packaging_nvidia_icd_template):
+glvnd/nvidia_icd.json: unpack-stamp $(packaging_nvidia_icd_template)
 	mkdir -p $(@D)
-	sed 's/__NV_VK_ICD__/libGLX_nvidia.so.0/' $< > $@
-nonglvnd/nvidia_icd.json: $(nvidia_icd.json.template)
+	sed 's/__NV_VK_ICD__/libGLX_nvidia.so.0/' "$(nvidia_icd_template)" > $@
+nonglvnd/nvidia_icd.json: unpack-stamp $(packaging_nvidia_icd_template)
 	mkdir -p $(@D)
-	sed 's/__NV_VK_ICD__/libGL.so.1/' $< > $@
+	sed 's/__NV_VK_ICD__/libGL.so.1/' "$(nvidia_icd_template)" > $@
 
-debian/nv-readme.ids: debian/nv-readme.ids.common debian/nv-readme.ids.$(DEB_HOST_ARCH)
-	cat $^ | sort -u > $@
+debian/nv-readme.ids: debian/nv-readme.ids.$(DEB_HOST_ARCH)
+	cp $< $@
 
 nv-readme.ids: unpack-stamp debian/nv-readme.ids
 	sed -r	-e '0,/A. Supported|APPENDIX A: SUPPORTED/d' \
@@ -335,7 +338,7 @@ override_dh_gencontrol:
 		$(foreach a,$(ARCH_CANDIDATES),-V'arch:$a=$(filter $a,$(DRIVER_ARCH_LIST))') \
 		-V'nvidia:kmod:binary=$(deps_nvidia_kmod_binary)' \
 		-V'nvidia:kmod:source=$(deps_nvidia_kmod_source)' \
-		-V'nvidia:kmod:tested:Linux=$(strip $(or $(LINUX_KMOD_TESTED_$(DEB_HOST_ARCH)),$(LINUX_KMOD_TESTED),???))' \
+		-V'nvidia:kmod:tested:Description=$(kmod_tested_description)' \
 		-V'nvidia:kmod:blob:archlist=$(subst $(space),$(comma)$(space),$(BLOB_ARCH_LIST)) architecture$(if $(filter 1,$(words $(BLOB_ARCH_LIST))),,s)' \
 		-Vnvidia:kmod:Description="`cat debian/control.kmod`" \
 		-Vnvidia:Models="`cat debian/control.models`"
@@ -344,6 +347,7 @@ override_dh_gencontrol:
 debian/substvars:
 	echo 'nvidia:VariantDesc=$(variant_description)' > $@
 	echo 'nvidia:VariantDescShort=$(variant_description_short)' >> $@
+	echo 'nvidia:kmod:tested:Description=$(kmod_tested_description)' >> $@
 
 # Do not run dh_strip here.  The NVIDIA license says:
 #
@@ -423,6 +427,7 @@ debian/control-real: $(CONTROL_FILES)
 		-V'nvidia:Variant=$(-variant)' \
 		-V'libcuda1=$(libcuda1)' \
 		-V'Vcs-Git:Branch=$(if $(GIT_BRANCH), -b $(GIT_BRANCH))' \
+		-V'nvidia:kmod:tested:Description=$(kmod_tested_description)' \
 		$(foreach a,$(ARCH_CANDIDATES),-V'arch:$a=$(filter $a,$(DRIVER_ARCH_LIST))') \
 		-- \
 		debian/control.in > debian/control.new

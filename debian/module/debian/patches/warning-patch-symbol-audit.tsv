@@ -1,0 +1,18 @@
+patch	file	symbol	target file exists	target symbol exists	header declaration exists	cross-file callers exist	same-file callers exist	new header exists	semantic purpose	classification	action
+0049-backport-uvm-warning-fixes-from-396.18.patch	nvidia-uvm/uvm8_volta_access_counter_buffer.c	include-only	no	no	no	no	no	no	Volta warning include	later-driver-only	disabled; 367.134 predates Volta access counters
+0049-backport-uvm-warning-fixes-from-415.13.patch	multiple UVM files	local warning fixes	yes	yes	varies	no	yes	yes	local warning fixes	safe-local-static	retained active; applies strictly
+0049-backport-uvm-warning-fixes-from-418.30.patch	nvidia-uvm/uvm8_pushbuffer.c	uvm_pushbuffer_get_size/update_progress	yes	yes	unknown	unknown	unknown	n/a	unused-function removal	semantic-port-required	deferred; removal requires complete UVM caller/declaration audit
+0049-backport-uvm-warning-fixes-from-418.30.patch	nvidia-uvm/uvm8_volta_fault_buffer.c	Volta fault-buffer include	no	no	no	no	no	no	later Volta include	later-driver-only	disabled with parent patch
+0049-backport-warning-fixes-from-430.09.patch	nvidia/nv-kthread-q.c	_raw_q_flush	no	no	no	no	no	n/a	static warning fix	later-driver-only	disabled; target source absent in 367.134
+0049-backport-uvm-warning-fixes-from-435.17.patch	UVM include-only batch	uvm8_test/hal/tools/api headers	yes	unknown	unknown	unknown	unknown	yes	missing include warnings	semantic-port-required	deferred until compiler or symbol evidence identifies required includes
+0049-backport-uvm-warning-fixes-from-510.39.01.patch	UVM Pascal test files	static conversions	yes	unknown	unknown	unknown	unknown	n/a	warning-only static conversion	semantic-port-required	deferred pending cross-translation-unit audit
+0050-backport-uvm-warning-fixes-from-535.146.02.patch	UVM fault permission code	uvm_fault_access_type_t	yes	unknown	unknown	unknown	unknown	n/a	fault access type semantic change	semantic-port-required	deferred; no typedef alias introduced without source-backed need
+0051-backport-warning-fixes-from-535.216.01.patch	nvidia-modeset/nvidia-modeset-linux.c	nvkms_open_common/nvkms_ioctl_common	yes	yes	no	no	yes	n/a	static warning fix	safe-local-static	retained and rebased
+0051-backport-warning-fixes-from-535.216.01.patch	nvidia/nv-dma.c	nv_load_dma_map_scatterlist	yes	yes	no	no	yes	n/a	static warning fix	safe-local-static	retained and rebased
+0051-backport-warning-fixes-from-535.216.01.patch	nvidia/nv-kthread-q-selftest.c	on_nvq_assert	no	no	no	no	no	n/a	static warning fix	later-driver-only	omitted from rebased patch
+0051-backport-warning-fixes-from-535.216.01.patch	nvidia/nv-ibmnpu.c	nv-ibmnpu include	no	no	no	no	no	no	architecture-specific include	architecture-irrelevant	omitted from amd64-only rebased patch
+0052-backport-uvm-warning-fixes-from-560.28.03.patch	UVM include-only batch	uvm8 includes	yes	unknown	unknown	unknown	unknown	yes	missing include warnings	semantic-port-required	deferred pending symbol/header audit
+0053-fix-more-warnings.patch	nvidia/nv-gpu-numa.c	filldir_get_memblock_id	no	no	no	no	no	n/a	dir_context actor API adaptation	later-driver-only	omitted; target file absent in 367.134
+0053-fix-more-warnings.patch	present core files	local warning fixes	yes	yes	varies	no	yes	yes	warning cleanup	safe-local-static	retained and rebased
+0054-fix-more-uvm-warnings.patch	UVM warning hunk	warning-only	unknown	unknown	unknown	unknown	unknown	n/a	warning cleanup	semantic-port-required	deferred until compiler evidence
+0057-backport-uvm-fixes-from-535.230.02.patch	UVM semantic changes	ownership/lifetime-sensitive helpers	yes	unknown	unknown	unknown	unknown	n/a	UVM semantic fix	semantic-port-required	deferred for runtime-safety audit

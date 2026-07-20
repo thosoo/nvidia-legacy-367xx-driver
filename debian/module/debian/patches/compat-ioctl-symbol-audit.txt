@@ -1,0 +1,29 @@
+Compat ioctl symbol audit for cumulative NVIDIA 367.134 kernel tree.
+
+common/inc/nv-linux.h
+  linux/ioctl32.h / linux/syscalls.h: legacy manual-registration headers.
+  Before this patch selected by NVCPU_X86_64 && !HAVE_COMPAT_IOCTL.
+  After this patch selected by NVCPU_X86_64 && !NV_FILE_OPERATIONS_HAS_COMPAT_IOCTL.
+  Bookworm: omitted. Trixie: omitted. Old kernels without file_operations.compat_ioctl: included.
+
+conftest.sh
+  NV_FILE_OPERATIONS_HAS_COMPAT_IOCTL producer: type probe for struct file_operations.compat_ioctl.
+  Bookworm/Trixie: defined by CI. Old kernels without compat_ioctl: undefined.
+
+nvidia/nv-frontend.c
+  nvidia_frontend_compat_ioctl and .compat_ioctl consumer.
+  Bookworm/Trixie: callback compiled. Old kernels: callback field omitted.
+
+nvidia/os-interface.c
+  register_ioctl32_conversion / unregister_ioctl32_conversion consumers.
+  Bookworm/Trixie: manual registration omitted by !NV_FILE_OPERATIONS_HAS_COMPAT_IOCTL condition.
+  Old kernels: registration and unregister both compiled with matching condition.
+
+nvidia/nv.c
+  nv_register_compat_ioctl / nv_unregister_compat_ioctl call sites.
+  Bookworm/Trixie: calls omitted by !NV_FILE_OPERATIONS_HAS_COMPAT_IOCTL condition.
+  Old kernels: init and teardown call matching registration helpers.
+
+nvidia-uvm/uvm8.c, nvidia-uvm/uvm8_tools.c, nvidia-uvm/uvm_unsupported.c
+  .compat_ioctl consumers selected by NV_FILE_OPERATIONS_HAS_COMPAT_IOCTL.
+  Bookworm/Trixie: callbacks compiled. No manual ioctl32 registration in 367 UVM.

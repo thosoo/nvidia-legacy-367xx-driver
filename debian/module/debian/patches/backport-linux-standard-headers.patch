@@ -1,0 +1,112 @@
+Author: OpenAI Codex
+Description: use kernel stdarg/stddef wrappers for -nostdinc module builds
+ NVIDIA 367.134 includes compiler-provided <stdarg.h> and <stddef.h> from
+ kernel module headers. Modern Debian Kbuild invokes external modules with
+ -nostdinc, so those userspace compiler headers are not available while Linux
+ provides <linux/stdarg.h> and <linux/stddef.h>. Add small wrappers inspired by
+ NVIDIA's later nv_stdarg.h approach (for example 570-series sources) and keep
+ non-kernel/shared inclusion paths on the compiler headers.
+Forwarded: not-needed
+
+diff -Naur a/common/inc/nv.h b/common/inc/nv.h
+--- a/common/inc/nv.h	2019-12-17 13:33:51.000000000 +0000
++++ b/common/inc/nv.h	2026-07-19 19:50:17.092160390 +0000
+@@ -14,7 +14,7 @@
+ 
+ #include <nvtypes.h>
+ #include <nvCpuUuid.h>
+-#include <stdarg.h>
++#include "nv_stdarg.h"
+ 
+ #if !defined(NV_MIN)
+ #define NV_MIN(_a,_b) ((_a) < (_b) ? (_a) : (_b))
+diff -Naur a/common/inc/nv_stdarg.h b/common/inc/nv_stdarg.h
+--- a/common/inc/nv_stdarg.h	1970-01-01 00:00:00.000000000 +0000
++++ b/common/inc/nv_stdarg.h	2026-07-19 19:50:16.388163721 +0000
+@@ -0,0 +1,17 @@
++/* SPDX-License-Identifier: MIT */
++#ifndef _NV_STDARG_H_
++#define _NV_STDARG_H_
++
++/*
++ * Inspired by NVIDIA's later nv_stdarg.h wrapper (for example the 570 series),
++ * simplified for this 367.134 Linux packaging fork. Kernel builds use the
++ * kernel-provided stdarg declarations because Kbuild compiles modules with
++ * -nostdinc; non-kernel/shared uses keep the compiler header.
++ */
++#if defined(__KERNEL__)
++#include <linux/stdarg.h>
++#else
++#include <stdarg.h>
++#endif
++
++#endif /* _NV_STDARG_H_ */
+diff -Naur a/common/inc/nv_stddef.h b/common/inc/nv_stddef.h
+--- a/common/inc/nv_stddef.h	1970-01-01 00:00:00.000000000 +0000
++++ b/common/inc/nv_stddef.h	2026-07-19 19:50:16.396163684 +0000
+@@ -0,0 +1,15 @@
++/* SPDX-License-Identifier: MIT */
++#ifndef _NV_STDDEF_H_
++#define _NV_STDDEF_H_
++
++/*
++ * Keep shared headers usable outside the Linux kernel while avoiding userspace
++ * compiler headers during Kbuild -nostdinc module compilation.
++ */
++#if defined(__KERNEL__)
++#include <linux/stddef.h>
++#else
++#include <stddef.h>
++#endif
++
++#endif /* _NV_STDDEF_H_ */
+diff -Naur a/common/inc/os-interface.h b/common/inc/os-interface.h
+--- a/common/inc/os-interface.h	2019-12-17 13:33:51.000000000 +0000
++++ b/common/inc/os-interface.h	2026-07-19 19:50:17.096160370 +0000
+@@ -24,7 +24,7 @@
+ *                                                                           *
+ \***************************************************************************/
+ 
+-#include <stdarg.h>
++#include "nv_stdarg.h"
+ 
+ /*
+  * Define away Microsoft compiler extensions when possible
+diff -Naur a/nvidia-modeset/nvidia-modeset-os-interface.h b/nvidia-modeset/nvidia-modeset-os-interface.h
+--- a/nvidia-modeset/nvidia-modeset-os-interface.h	2019-12-17 13:36:11.000000000 +0000
++++ b/nvidia-modeset/nvidia-modeset-os-interface.h	2026-07-19 19:50:17.096160370 +0000
+@@ -16,8 +16,8 @@
+ #if !defined(_NVIDIA_MODESET_OS_INTERFACE_H_)
+ #define _NVIDIA_MODESET_OS_INTERFACE_H_
+ 
+-#include <stddef.h>  /* size_t */
+-#include <stdarg.h>  /* va_list */
++#include "nv_stddef.h" /* size_t */
++#include "nv_stdarg.h" /* va_list */
+ 
+ #include "nvtypes.h" /* NvU8 */
+ 
+diff -Naur a/nvidia-modeset/nvkms.h b/nvidia-modeset/nvkms.h
+--- a/nvidia-modeset/nvkms.h	2019-12-17 13:36:11.000000000 +0000
++++ b/nvidia-modeset/nvkms.h	2026-07-19 19:50:17.096160370 +0000
+@@ -9,7 +9,7 @@
+ #define __NV_KMS_H__
+ 
+ #include "nvtypes.h"
+-#include <stddef.h> /* size_t */
++#include "nv_stddef.h" /* size_t */
+ 
+ #include "nvkms-kapi.h"
+ 
+diff -Naur a/nvidia-uvm/uvm8_mmu.c b/nvidia-uvm/uvm8_mmu.c
+--- a/nvidia-uvm/uvm8_mmu.c	2019-12-17 13:33:46.000000000 +0000
++++ b/nvidia-uvm/uvm8_mmu.c	2026-07-19 19:50:17.096160370 +0000
+@@ -32,7 +32,7 @@
+ #include "uvm8_push.h"
+ #include "uvm8_mem.h"
+ #include "uvm8_va_space.h"
+-#include <stdarg.h>
++#include "nv_stdarg.h"
+ 
+ // The page tree has 5 levels on pascal, and the root is never freed by a normal 'put' operation
+ // which leaves a maximum of 4 levels

@@ -11,7 +11,7 @@ Description: let Kbuild set the compiler version
  
    .PHONY: modules module clean clean_conftest modules_install
    modules clean modules_install:
--	@$(MAKE) "CC=$(CC)" $(KBUILD_PARAMS) $@
+-	$(MAKE) "CC=$(CC)" $(KBUILD_PARAMS) $@
 -	@if [ "$@" = "modules" ]; then \
 +	$(MAKE) $(KBUILD_PARAMS) $@
 +	@set -x; if [ "$@" = "modules" ]; then \
@@ -20,7 +20,7 @@ Description: let Kbuild set the compiler version
  	      ./split-object-file.sh $$module.ko; \
 --- a/Kbuild
 +++ b/Kbuild
-@@ -107,7 +107,7 @@ NV_CONFTEST_SCRIPT := $(src)/conftest.sh
+@@ -94,7 +94,7 @@ NV_CONFTEST_SCRIPT := $(src)/conftest.sh
  NV_CONFTEST_HEADER := $(obj)/conftest/headers.h
  
  NV_CONFTEST_CMD := /bin/sh $(NV_CONFTEST_SCRIPT) \
@@ -28,4 +28,3 @@ Description: let Kbuild set the compiler version
 + "$(strip $(CC))" "$(strip $(HOST_CC))" $(ARCH) $(NV_KERNEL_SOURCES) $(NV_KERNEL_OUTPUT)
  
  NV_CONFTEST_CFLAGS := $(shell $(NV_CONFTEST_CMD) build_cflags)
- 

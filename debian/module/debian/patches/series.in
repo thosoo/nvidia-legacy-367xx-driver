@@ -7,6 +7,9 @@ do-div-cast.patch
 #HAS_UVM#0002-backport-error-on-unknown-conftests-uvm-part.patch
 0003-backport-set_-memory-pages-_array-_uc-changes-from-5.patch
 0004-fix-conftest-includes.patch
+backport-linux-standard-headers.patch
+backport-asm-kmap_types-header.patch
+backport-linux-ioctl32-header.patch
 0008-backport-nvidia-drm-helper.h-inclusion-from-450.51.patch
 0021-backport-acpi_op_remove-changes-from-470.182.03.patch
 0022-backport-drm_connector_has_override_edid-changes-fro.patch
@@ -14,66 +17,67 @@ do-div-cast.patch
 #HAS_UVM#0024-backport-vm_area_struct_has_const_vm_flags-changes-f.patch
 0025-backport-drm_driver_has_dumb_destroy-changes-from-52.patch
 0026-backport-get_user_pages-changes-from-418.30.patch
-0027-backport-get_user_pages-changes-from-520.56.06.patch
-0028-backport-get_user_pages-changes-from-525.53.patch
-#HAS_UVM#0029-backport-get_user_pages-changes-from-525.53-uvm-part.patch
-0030-backport-get_user_pages-changes-from-535.86.05.patch
+# consolidated into 0026: 0027-backport-get_user_pages-changes-from-520.56.06.patch
+# consolidated into 0026: 0028-backport-get_user_pages-changes-from-525.53.patch
+# consolidated into 0026: #HAS_UVM#0029-backport-get_user_pages-changes-from-525.53-uvm-part.patch
+# consolidated into 0026: 0030-backport-get_user_pages-changes-from-535.86.05.patch
 0031-backport-asm-page.h-changes-from-470.223.02.patch
 0032-backport-drm_gem_prime_handle_to_fd-changes-from-470.patch
 0033-refuse-to-load-legacy-module-if-IBT-is-enabled.patch
 #HAS_UVM#0034-fix-typos.patch
 0038-backport-drm_unlocked_ioctl_flag_present-changes-fro.patch
 0040-backport-screen_info-changes-from-470.239.06.patch
-0041-backport-CONFIG_MITIGATION_RETPOLINE-changes-from-47.patch
-0043-backport-follow_pfn-changes-from-550.90.07.patch
+# 367.134 has no nv-retpoline include: 0041-backport-CONFIG_MITIGATION_RETPOLINE-changes-from-47.patch
+# 367.134 already guards os_lookup_user_io_memory with NV_FOLLOW_PFN_PRESENT: 0043-backport-follow_pfn-changes-from-550.90.07.patch
 0046-backport-nv_get_kern_phys_address-changes-from-555.4.patch
 0047-backport-drm_output_poll_changed-changes-from-535.21.patch
 0048-backport-cmd_symlink-changes-from-550.142.patch
-#HAS_UVM#0049-backport-uvm-warning-fixes-from-396.18.patch
+# NVIDIA 367.134 predates Volta access counters and lacks nvidia-uvm/uvm8_volta_access_counter_buffer.c; include-only later-driver patch inactive: 0049-backport-uvm-warning-fixes-from-396.18.patch
 #HAS_UVM#0049-backport-uvm-warning-fixes-from-415.13.patch
-#HAS_UVM#0049-backport-uvm-warning-fixes-from-418.30.patch
-0049-backport-warning-fixes-from-430.09.patch
-#HAS_UVM#0049-backport-uvm-warning-fixes-from-435.17.patch
-#HAS_UVM#0049-backport-uvm-warning-fixes-from-510.39.01.patch
-#HAS_UVM#0050-backport-uvm-warning-fixes-from-535.146.02.patch
+# warning-only UVM static/removal batch needs symbol-by-symbol audit before activation; includes later Volta hunks absent from 367.134: 0049-backport-uvm-warning-fixes-from-418.30.patch
+# NVIDIA 367.134 has no nvidia/nv-kthread-q.c; _raw_q_flush static warning fix is later-driver-only: 0049-backport-warning-fixes-from-430.09.patch
+# include-only UVM warning batch deferred; headers exist but no compiler evidence yet requires these includes: 0049-backport-uvm-warning-fixes-from-435.17.patch
+# warning-only Pascal static conversion deferred pending cross-TU symbol audit: 0049-backport-uvm-warning-fixes-from-510.39.01.patch
+# type-semantic UVM fault access patch deferred until compiler evidence or source comparison proves uvm_fault_access_type_t is required: 0050-backport-uvm-warning-fixes-from-535.146.02.patch
 0051-backport-warning-fixes-from-535.216.01.patch
-#HAS_UVM#0052-backport-uvm-warning-fixes-from-560.28.03.patch
+# include-only UVM warning batch deferred pending symbol/header audit: 0052-backport-uvm-warning-fixes-from-560.28.03.patch
 0053-fix-more-warnings.patch
-#HAS_UVM#0054-fix-more-uvm-warnings.patch
+# UVM warning-only hunk deferred until compiler reports the warning or symbol audit proves it safe: 0054-fix-more-uvm-warnings.patch
 0055-backport-file_operations_fop_unsigned_offset_present.patch
 0056-backport-LD_SCRIPT-changes-from-535.230.02.patch
-#HAS_UVM#0057-backport-uvm-fixes-from-535.230.02.patch
+# UVM semantic safety patch deferred pending ownership/lifetime audit against authoritative later source: 0057-backport-uvm-fixes-from-535.230.02.patch
 0060-backport-build_cflags-changes-from-525.85.05.patch
-0061-backport-drm_gem_object_vmap_has_map_arg-changes-fro.patch
-0063-backport-conftest.sh-comment-changes-from-515.48.07.patch
-0063-backport-conftest.sh-comment-changes-from-525.53.patch
-0063-backport-conftest.sh-comment-changes-from-545.23.06.patch
+# 367.134 has no drm_gem_object_funcs vmap callback consumer; dma_buf_map/iosys_map probe is later-driver-only: 0061-backport-drm_gem_object_vmap_has_map_arg-changes-fro.patch
+# comment-only conftest documentation refresh is later-maintenance noise for 367.134 and is inactive: 0063-backport-conftest.sh-comment-changes-from-515.48.07.patch
+# comment-only conftest documentation refresh is later-maintenance noise for 367.134 and is inactive: 0063-backport-conftest.sh-comment-changes-from-525.53.patch
+# comment-only conftest documentation refresh is later-maintenance noise for 367.134 and is inactive: 0063-backport-conftest.sh-comment-changes-from-545.23.06.patch
 0064-backport-drm_driver_has_date-from-570.124.04.patch
 0065-backport-ccflags-y-changes-from-570.153.02.patch
 0066-backport-nv_timer_delete_sync-changes-from-570.153.0.patch
 0067-backport-drm_connector_helper_funcs_mode_valid_has_c.patch
-0071-backport-nv_vma_start_write-changes-from-570.169.patch
-0074-backport-drm_fb_create_takes_format_info-changes-fro.patch
-0075-backport-drm_print.h-changes-from-570.211.01.patch
-0076-backport-nv_in_hardirq-changes-from-580.119.02.patch
-0077-backport-vma_flags_set_word-changes-from-580.126.09.patch
-#HAS_UVM#0078-backport-vma_flags_set_word-changes-from-580.126.09-.patch
-0079-backport-dma_map_ops_has_map_phys-changes-from-580.1.patch
-0080-backport-for_each_-_plane_in_state-changes-from-580..patch
-0081-support-fallback-for-for_each_-_plane_in_state.patch
-0082-backport-for_each_-_crtc_in_state-changes-from-580.1.patch
-0083-support-fallback-for-for_each_-_crtc_in_state.patch
+# Linux 6.1 and 6.12 predate the vma_start_write() change that calls GPL-only __vma_start_write; fallback manipulates private VMA locking/refcount/wait-state internals and remains inactive until Linux 6.15+ enters the tested matrix: 0071-backport-nv_vma_start_write-changes-from-570.169.patch
+# Four-argument drm_mode_config_funcs::fb_create postdates Linux 6.12 and is outside the current Bookworm/Trixie matrix: 0074-backport-drm_fb_create_takes_format_info-changes-fro.patch
+# drm_print.h include probe is inactive until compiler evidence shows a 367 DRM source needs declarations not provided by existing includes on Linux 6.1/6.12: 0075-backport-drm_print.h-changes-from-570.211.01.patch
+# 367.134 has no common/inc/nv-time.h target; do not relocate in_irq() wrapper without compiler evidence for Linux 6.1/6.12: 0076-backport-nv_in_hardirq-changes-from-580.119.02.patch
+# Depends on inactive future VMA-locking work from 0071 and is not required for Linux 6.1/6.12: 0077-backport-vma_flags_set_word-changes-from-580.126.09.patch
+# Depends on inactive future VMA-locking work from 0071 and is not required for Linux 6.1/6.12 UVM: 0078-backport-vma_flags_set_word-changes-from-580.126.09-.patch
+# dma_map_ops map_phys transition is inactive until Linux 6.1/6.12 compiler evidence shows a consumed 367 branch requires it: 0079-backport-dma_map_ops_has_map_phys-changes-from-580.1.patch
+# nvidia-drm-helper plane iteration producer is inactive; 367.134 lacks nvidia-drm-helper.[ch] and no consumer exists: 0080-backport-for_each_-_plane_in_state-changes-from-580..patch
+# nvidia-drm-helper plane iteration fallback is inactive with its producer; no 367.134 consumer exists: 0081-support-fallback-for-for_each_-_plane_in_state.patch
+# nvidia-drm-helper CRTC iteration producer is inactive; 367.134 lacks nvidia-drm-helper.[ch] and no consumer exists: 0082-backport-for_each_-_crtc_in_state-changes-from-580.1.patch
+# nvidia-drm-helper CRTC iteration fallback is inactive with its producer; no 367.134 consumer exists: 0083-support-fallback-for-for_each_-_crtc_in_state.patch
 
 # build system updates
 conftest-verbose.patch
+use-kbuild-module-directory.patch
 use-kbuild-compiler.patch
 use-kbuild-flags.patch
 nvidia-use-ARCH.o_binary.patch
 nvidia-modeset-use-ARCH.o_binary.patch
 
-# armhf support
-include-swiotlb-header-on-arm.patch
-ignore_xen_on_arm.patch
-arm-outer-sync.patch
-nvidia-drm-arm-cflags.patch
-armhf-on-arm64-kernel.patch
+# armhf support is intentionally inactive in this amd64-only 367xx fork.
+# include-swiotlb-header-on-arm.patch
+# ignore_xen_on_arm.patch
+# arm-outer-sync.patch
+# nvidia-drm-arm-cflags.patch
+# armhf-on-arm64-kernel.patch
