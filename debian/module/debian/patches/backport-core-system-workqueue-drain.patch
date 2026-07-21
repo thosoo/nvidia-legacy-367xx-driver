@@ -1,96 +1,314 @@
-Description: Drain only NVIDIA core work instead of flushing system workqueues
+Description: Drain only NVIDIA core work with a kthread-backed queue
 Author: OpenAI Codex
 Forwarded: not-needed
 
 --- a/common/inc/nv-linux.h
 +++ b/common/inc/nv-linux.h
-@@ -1636,9 +1636,44 @@ typedef struct nv_work_s {
-     void *data;
- } nv_work_t;
+@@ -82,6 +82,7 @@
+ #include <linux/list.h>             /* circular linked list             */
+ #include <linux/stddef.h>           /* NULL, offsetof                   */
+ #include <linux/wait.h>             /* wait queues                      */
++#include <linux/kthread.h>          /* kthread_create_on_node(), stop   */
+ #include <linux/string.h>           /* strchr(), strpbrk()              */
 
+ #include <linux/ctype.h>            /* isspace(), etc                   */
+@@ -1631,38 +1632,51 @@ typedef struct sg_table nv_sys_sgt_t;
+ #endif /* defined(NV_SG_ALLOC_TABLE_FROM_PAGES_PRESENT) &&
+           !defined(NV_DOM0_KERNEL_PRESENT) */
+
+-typedef struct work_struct nv_task_t;
+-
+-typedef struct nv_work_s {
+-    nv_task_t task;
+-    void *data;
+-} nv_work_t;
+-
 -#define NV_WORKQUEUE_SCHEDULE(work) schedule_work(work)
 -#define NV_WORKQUEUE_FLUSH()                           \
 -    flush_scheduled_work();
-+extern atomic_t nv_linux_workqueue_pending;
-+extern wait_queue_head_t nv_linux_workqueue_wait;
++typedef struct nv_work_s nv_work_t;
++typedef struct nv_work_s nv_task_t;
 +
-+static inline int nv_linux_workqueue_schedule(nv_task_t *work)
-+{
-+    int ret;
+ #if (NV_INIT_WORK_ARGUMENT_COUNT == 2)
++#define NV_WORKQUEUE_DATA_T nv_task_t
++typedef void (*nv_workqueue_func_t)(nv_task_t *);
++#define NV_WORKQUEUE_UNPACK_DATA(tq) (tq)
++#elif (NV_INIT_WORK_ARGUMENT_COUNT == 3)
++#define NV_WORKQUEUE_DATA_T void
++typedef void (*nv_workqueue_func_t)(void *);
++#define NV_WORKQUEUE_UNPACK_DATA(tq) (nv_work_t *)(tq)
++#else
++#error "NV_INIT_WORK_ARGUMENT_COUNT value unrecognized!"
++#endif
 +
-+    /*
-+     * Account before queueing so a concurrent flush cannot observe an
-+     * accepted work item as idle. If schedule_work() rejects a duplicate
-+     * pending item, immediately remove the speculative count.
-+     */
-+    atomic_inc(&nv_linux_workqueue_pending);
-+    ret = schedule_work(work);
-+    if (!ret)
-+    {
-+        if (atomic_dec_and_test(&nv_linux_workqueue_pending))
-+            wake_up_all(&nv_linux_workqueue_wait);
-+    }
++struct nv_work_s {
++    struct list_head entry;
++    nv_workqueue_func_t handler;
++    void *data;
++    NvU64 queued_sequence;
++    NvU64 running_sequence;
++    NvBool queued;
++    NvBool running;
++    NvBool dynamic;
++};
 +
-+    return ret;
-+}
-+
-+static inline void nv_linux_workqueue_complete(void)
-+{
-+    if (atomic_dec_and_test(&nv_linux_workqueue_pending))
-+        wake_up_all(&nv_linux_workqueue_wait);
-+}
-+
-+static inline void nv_linux_workqueue_flush(void)
-+{
-+    wait_event(nv_linux_workqueue_wait,
-+               atomic_read(&nv_linux_workqueue_pending) == 0);
-+}
++int nv_linux_workqueue_init(void);
++void nv_linux_workqueue_shutdown(void);
++int nv_linux_workqueue_schedule(nv_task_t *work);
++void nv_linux_workqueue_flush(void);
 +
 +#define NV_WORKQUEUE_SCHEDULE(work) nv_linux_workqueue_schedule(work)
-+#define NV_WORKQUEUE_COMPLETE() nv_linux_workqueue_complete()
 +#define NV_WORKQUEUE_FLUSH() nv_linux_workqueue_flush()
- #if (NV_INIT_WORK_ARGUMENT_COUNT == 2)
++
  #define NV_WORKQUEUE_INIT(tq,handler,data)             \
      {                                                  \
+-        struct work_struct __work =                    \
+-            __WORK_INITIALIZER(*(tq), handler);        \
+-        *(tq) = __work;                                \
++        INIT_LIST_HEAD(&(tq)->entry);                  \
++        (tq)->handler = (handler);                     \
++        (tq)->data = (data);                           \
++        (tq)->queued_sequence = 0;                     \
++        (tq)->running_sequence = 0;                    \
++        (tq)->queued = NV_FALSE;                       \
++        (tq)->running = NV_FALSE;                      \
++        (tq)->dynamic = NV_FALSE;                      \
+     }
+-#define NV_WORKQUEUE_DATA_T nv_task_t
+-#define NV_WORKQUEUE_UNPACK_DATA(tq)                   \
+-    container_of((tq), nv_work_t, task)
+-#elif (NV_INIT_WORK_ARGUMENT_COUNT == 3)
+-#define NV_WORKQUEUE_INIT(tq,handler,data)             \
+-    {                                                  \
+-        struct work_struct __work =                    \
+-            __WORK_INITIALIZER(*(tq), handler, data);  \
+-        *(tq) = __work;                                \
+-    }
+-#define NV_WORKQUEUE_DATA_T void
+-#define NV_WORKQUEUE_UNPACK_DATA(tq) (nv_work_t *)(tq)
+-#else
+-#error "NV_INIT_WORK_ARGUMENT_COUNT value unrecognized!"
+-#endif
+
+ #define NV_MAX_REGISTRY_KEYS_LENGTH   512
+
 --- a/nvidia/nv.c
 +++ b/nvidia/nv.c
-@@ -43,6 +43,9 @@
+@@ -43,6 +43,154 @@
  static NvU32 num_nv_devices = 0;
  NvU32 num_probed_nv_devices = 0;
 
-+atomic_t nv_linux_workqueue_pending = ATOMIC_INIT(0);
-+DECLARE_WAIT_QUEUE_HEAD(nv_linux_workqueue_wait);
++static DEFINE_SPINLOCK(nv_linux_workqueue_lock);
++static LIST_HEAD(nv_linux_workqueue_items);
++static DECLARE_WAIT_QUEUE_HEAD(nv_linux_workqueue_wait);
++static struct task_struct *nv_linux_workqueue_thread;
++static NvBool nv_linux_workqueue_stopping;
++static NvU64 nv_linux_workqueue_next_sequence;
++static NvU64 nv_linux_workqueue_completed_sequence;
++
++static int nv_linux_workqueue_main(void *arg)
++{
++    nv_work_t *work;
++    unsigned long flags;
++
++    while (!kthread_should_stop())
++    {
++        wait_event_interruptible(nv_linux_workqueue_wait,
++            kthread_should_stop() || !list_empty(&nv_linux_workqueue_items));
++
++        for (;;)
++        {
++            spin_lock_irqsave(&nv_linux_workqueue_lock, flags);
++            if (list_empty(&nv_linux_workqueue_items))
++            {
++                spin_unlock_irqrestore(&nv_linux_workqueue_lock, flags);
++                break;
++            }
++
++            work = list_first_entry(&nv_linux_workqueue_items,
++                                    nv_work_t, entry);
++            list_del_init(&work->entry);
++            work->running_sequence = work->queued_sequence;
++            work->queued = NV_FALSE;
++            work->running = NV_TRUE;
++            spin_unlock_irqrestore(&nv_linux_workqueue_lock, flags);
++
++#if (NV_INIT_WORK_ARGUMENT_COUNT == 2)
++            work->handler(work);
++#else
++            work->handler(work);
++#endif
++
++            spin_lock_irqsave(&nv_linux_workqueue_lock, flags);
++            work->running = NV_FALSE;
++            if (work->running_sequence > nv_linux_workqueue_completed_sequence)
++                nv_linux_workqueue_completed_sequence = work->running_sequence;
++            spin_unlock_irqrestore(&nv_linux_workqueue_lock, flags);
++
++            wake_up_all(&nv_linux_workqueue_wait);
++
++            if (work->dynamic)
++                os_free_mem((void *)work);
++        }
++    }
++
++    spin_lock_irqsave(&nv_linux_workqueue_lock, flags);
++    nv_linux_workqueue_stopping = NV_TRUE;
++    spin_unlock_irqrestore(&nv_linux_workqueue_lock, flags);
++    wake_up_all(&nv_linux_workqueue_wait);
++
++    return 0;
++}
++
++int nv_linux_workqueue_init(void)
++{
++    unsigned long flags;
++
++    spin_lock_irqsave(&nv_linux_workqueue_lock, flags);
++    INIT_LIST_HEAD(&nv_linux_workqueue_items);
++    nv_linux_workqueue_stopping = NV_FALSE;
++    nv_linux_workqueue_next_sequence = 0;
++    nv_linux_workqueue_completed_sequence = 0;
++    spin_unlock_irqrestore(&nv_linux_workqueue_lock, flags);
++
++    nv_linux_workqueue_thread = kthread_create_on_node(nv_linux_workqueue_main,
++                                                       NULL,
++                                                       NUMA_NO_NODE,
++                                                       "nvidia-wq");
++    if (IS_ERR(nv_linux_workqueue_thread))
++    {
++        int rc = PTR_ERR(nv_linux_workqueue_thread);
++
++        nv_linux_workqueue_thread = NULL;
++        spin_lock_irqsave(&nv_linux_workqueue_lock, flags);
++        nv_linux_workqueue_stopping = NV_TRUE;
++        spin_unlock_irqrestore(&nv_linux_workqueue_lock, flags);
++        return rc;
++    }
++
++    wake_up_process(nv_linux_workqueue_thread);
++    return 0;
++}
++
++int nv_linux_workqueue_schedule(nv_task_t *work)
++{
++    unsigned long flags;
++    int accepted = 0;
++
++    spin_lock_irqsave(&nv_linux_workqueue_lock, flags);
++    if ((nv_linux_workqueue_thread != NULL) && !nv_linux_workqueue_stopping &&
++        !work->queued)
++    {
++        work->queued_sequence = ++nv_linux_workqueue_next_sequence;
++        list_add_tail(&work->entry, &nv_linux_workqueue_items);
++        work->queued = NV_TRUE;
++        accepted = 1;
++    }
++    spin_unlock_irqrestore(&nv_linux_workqueue_lock, flags);
++
++    if (accepted)
++        wake_up_process(nv_linux_workqueue_thread);
++
++    return accepted;
++}
++
++void nv_linux_workqueue_flush(void)
++{
++    NvU64 barrier;
++    unsigned long flags;
++
++    spin_lock_irqsave(&nv_linux_workqueue_lock, flags);
++    barrier = nv_linux_workqueue_next_sequence;
++    spin_unlock_irqrestore(&nv_linux_workqueue_lock, flags);
++
++    wait_event(nv_linux_workqueue_wait,
++        nv_linux_workqueue_completed_sequence >= barrier);
++}
++
++void nv_linux_workqueue_shutdown(void)
++{
++    struct task_struct *thread;
++    unsigned long flags;
++
++    spin_lock_irqsave(&nv_linux_workqueue_lock, flags);
++    nv_linux_workqueue_stopping = NV_TRUE;
++    thread = nv_linux_workqueue_thread;
++    spin_unlock_irqrestore(&nv_linux_workqueue_lock, flags);
++
++    if (thread != NULL)
++    {
++        nv_linux_workqueue_flush();
++        kthread_stop(thread);
++    }
++
++    spin_lock_irqsave(&nv_linux_workqueue_lock, flags);
++    nv_linux_workqueue_thread = NULL;
++    spin_unlock_irqrestore(&nv_linux_workqueue_lock, flags);
++}
 +
  NvU32 nv_assign_gpu_count = 0;
  nv_pci_info_t nv_assign_gpu_pci_info[NV_MAX_DEVICES];
 
---- a/nvidia/nv-gvi.c
-+++ b/nvidia/nv-gvi.c
-@@ -53,6 +53,8 @@ void nv_gvi_kern_bh(
-     nv  = NV_STATE_PTR(nvl);
-
-     rm_gvi_bh(nvl->sp[NV_DEV_STACK_ISR_BH], nv);
-+
-+    NV_WORKQUEUE_COMPLETE();
- }
-
- #if defined(NV_PM_SUPPORT_DEVICE_DRIVER_MODEL)
---- a/nvidia/os-interface.c
-+++ b/nvidia/os-interface.c
-@@ -1044,6 +1044,7 @@ static void os_execute_work_item(
-
-     if (nv_kmem_cache_alloc_stack(&sp) != 0)
-     {
-+        NV_WORKQUEUE_COMPLETE();
-         return;
+@@ -678,6 +826,14 @@ int __init nvidia_init_module(void)
+         goto failed5;
      }
 
-@@ -1052,6 +1053,8 @@ static void os_execute_work_item(
-     os_free_mem((void *)work);
-
-     nv_kmem_cache_free_stack(sp);
++    rc = nv_linux_workqueue_init();
++    if (rc != 0)
++    {
++        nv_kmem_cache_free_stack(sp);
++        NV_KMEM_CACHE_DESTROY(nvidia_stack_t_cache);
++        goto failed5;
++    }
 +
-+    NV_WORKQUEUE_COMPLETE();
+     if (!rm_init_rm(sp))
+     {
+         nv_kmem_cache_free_stack(sp);
+@@ -685,4 +840,5 @@ int __init nvidia_init_module(void)
+         nv_printf(NV_DBG_ERRORS, "NVRM: rm_init_rm() failed!\n");
+         rc = -EIO;
++        nv_linux_workqueue_shutdown();
+         goto failed5;
+     }
+@@ -977,5 +1133,7 @@ failed4:
+     nv_lock_destroy_locks(sp, nv);
+     rm_shutdown_rm(sp);
+
++    nv_linux_workqueue_shutdown();
++
+     nv_kmem_cache_free_stack(sp);
+     NV_KMEM_CACHE_DESTROY(nvidia_stack_t_cache);
+@@ -1030,6 +1188,8 @@ void nvidia_exit_module(void)
+     // Shutdown the resource manager
+     rm_shutdown_rm(sp);
+
++    nv_linux_workqueue_shutdown();
++
+ #if defined(NVCPU_X86_64) && defined(CONFIG_IA32_EMULATION) && \
+   !defined(NV_FILE_OPERATIONS_HAS_COMPAT_IOCTL)
+     rm_unregister_compatible_ioctls(sp);
+--- a/nvidia/os-interface.c
++++ b/nvidia/os-interface.c
+@@ -1050,8 +1050,6 @@ static void os_execute_work_item(
+
+     rm_execute_work_item(sp, work->data);
+
+-    os_free_mem((void *)work);
+-
+     nv_kmem_cache_free_stack(sp);
  }
 
- NV_STATUS NV_API_CALL os_queue_work_item(
+@@ -1070,7 +1068,12 @@ NV_STATUS NV_API_CALL os_queue_work_item(
+
+     NV_WORKQUEUE_INIT(&work->task, os_execute_work_item,
+                       (void *)work);
+-    NV_WORKQUEUE_SCHEDULE(&work->task);
++    work->task.dynamic = NV_TRUE;
++    if (!NV_WORKQUEUE_SCHEDULE(&work->task))
++    {
++        os_free_mem((void *)work);
++        return NV_ERR_INVALID_STATE;
++    }
+
+     return NV_OK;
+ }

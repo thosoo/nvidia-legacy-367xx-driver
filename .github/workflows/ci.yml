@@ -21,6 +21,7 @@ jobs:
       - run: tests/kmap-types-header.sh
       - run: tests/linux-ioctl32-compat.sh
       - run: tests/post-build-diagnostics-status.sh
+      - run: tests/core-workqueue-drain.sh
       - run: test -z "$(git status --porcelain)"
   bookworm-package:
     name: bookworm-package
