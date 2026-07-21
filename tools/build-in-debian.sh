@@ -167,6 +167,9 @@ run_repository_test uvm-vm-fault-api tests/uvm-vm-fault-api.sh
 run_repository_test uvm-dependency-barrier tests/uvm-dependency-barrier.sh
 run_repository_test uvm-interface-header-order tests/uvm-interface-header-order.sh
 run_repository_test drm-preprocessor-balance-fixtures tests/drm-preprocessor-balance.sh
+run_repository_test userspace-manifest-inventory-fixtures tests/userspace-manifest-inventory.sh
+run_repository_test module-build-diagnostics tests/module-build-diagnostics.sh
+run_repository_test userspace-manifest-inventory tests/userspace-manifest-inventory.sh "/work/import/NVIDIA-Linux-x86_64-$version"
 
 set_stage module-series-integrity
 module_integrity_tree=$(tools/prepare-kernel-tree.sh "$suite" /work/module-series-integrity)
@@ -338,15 +341,58 @@ set +e
     else
         echo no > /work/logs/module-c-compiler-reached.txt
     fi
-    if grep -Eq '(^|[[:space:]])LD[[:space:]]+\[M\]' /work/logs/binary-build.log; then
+    for module_name in nvidia nvidia-modeset nvidia-drm nvidia-uvm; do
+        if test -s "$module_source/${module_name}.ko"; then
+            echo yes > "/work/logs/${module_name}-ko-created.txt"
+        else
+            echo no > "/work/logs/${module_name}-ko-created.txt"
+        fi
+    done
+    if test -s "$module_source/modules.order"; then
+        echo yes > /work/logs/modules-order-created.txt
+    else
+        echo no > /work/logs/modules-order-created.txt
+    fi
+    if test -s "$module_source/Module.symvers"; then
+        echo yes > /work/logs/module-symvers-created.txt
+    else
+        echo no > /work/logs/module-symvers-created.txt
+    fi
+    if grep -Eq '(^|[[:space:]])LD[[:space:]]+\[M\]|ld[[:space:]].*-o[[:space:]][^[:space:]]*kernel-source-tree/(nvidia|nvidia-modeset|nvidia-drm|nvidia-uvm)\.ko' /work/logs/binary-build.log || \
+       grep -qx yes /work/logs/nvidia-ko-created.txt && grep -qx yes /work/logs/nvidia-modeset-ko-created.txt && grep -qx yes /work/logs/nvidia-drm-ko-created.txt && grep -qx yes /work/logs/nvidia-uvm-ko-created.txt; then
         echo yes > /work/logs/module-linker-reached.txt
     else
         echo no > /work/logs/module-linker-reached.txt
     fi
-    if grep -Eq '(^|[[:space:]])MODPOST([[:space:]]|$)' /work/logs/binary-build.log; then
+    if grep -Eq '(^|[[:space:]])MODPOST([[:space:]]|$)|scripts/Makefile\.modpost' /work/logs/binary-build.log || test -s "$module_source/Module.symvers"; then
         echo yes > /work/logs/modpost-reached.txt
     else
         echo no > /work/logs/modpost-reached.txt
+    fi
+    if grep -qx yes /work/logs/nvidia-ko-created.txt && grep -qx yes /work/logs/nvidia-modeset-ko-created.txt && \
+       grep -qx yes /work/logs/nvidia-drm-ko-created.txt && grep -qx yes /work/logs/nvidia-uvm-ko-created.txt && \
+       grep -qx yes /work/logs/modules-order-created.txt; then
+        echo yes > /work/logs/kernel-module-build-complete.txt
+    else
+        echo no > /work/logs/kernel-module-build-complete.txt
+    fi
+    printf '%s\n' "$suite" > /work/logs/kernel-module-build-suite.txt
+    if grep -Eq 'dh_install|debian/rules binary|override_dh_install' /work/logs/binary-build.log; then
+        echo yes > /work/logs/dh-install-reached.txt
+    else
+        echo no > /work/logs/dh-install-reached.txt
+    fi
+    if grep -Eq 'dh_missing|fail-missing' /work/logs/binary-build.log; then
+        echo yes > /work/logs/binary-packaging-reached.txt
+    else
+        echo no > /work/logs/binary-packaging-reached.txt
+    fi
+    if grep -Eq 'dh_install.*(error|missing)|cannot stat|missing files' /work/logs/binary-build.log; then
+        echo no > /work/logs/dh-install-complete.txt
+    elif grep -qx yes /work/logs/dh-install-reached.txt; then
+        echo yes > /work/logs/dh-install-complete.txt
+    else
+        echo unknown > /work/logs/dh-install-complete.txt
     fi
     if grep -Eq 'yes' /work/logs/module-c-compiler-reached.txt /work/logs/module-linker-reached.txt /work/logs/modpost-reached.txt; then
         echo yes > /work/logs/kernel-compilation-reached.txt
