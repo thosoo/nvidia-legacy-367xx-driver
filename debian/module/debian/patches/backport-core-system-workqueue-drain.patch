@@ -1,0 +1,96 @@
+Description: Drain only NVIDIA core work instead of flushing system workqueues
+Author: OpenAI Codex
+Forwarded: not-needed
+
+--- a/common/inc/nv-linux.h
++++ b/common/inc/nv-linux.h
+@@ -1636,9 +1636,44 @@ typedef struct nv_work_s {
+     void *data;
+ } nv_work_t;
+
+-#define NV_WORKQUEUE_SCHEDULE(work) schedule_work(work)
+-#define NV_WORKQUEUE_FLUSH()                           \
+-    flush_scheduled_work();
++extern atomic_t nv_linux_workqueue_pending;
++extern wait_queue_head_t nv_linux_workqueue_wait;
++
++static inline int nv_linux_workqueue_schedule(nv_task_t *work)
++{
++    int ret;
++
++    /*
++     * Account before queueing so a concurrent flush cannot observe an
++     * accepted work item as idle. If schedule_work() rejects a duplicate
++     * pending item, immediately remove the speculative count.
++     */
++    atomic_inc(&nv_linux_workqueue_pending);
++    ret = schedule_work(work);
++    if (!ret)
++    {
++        if (atomic_dec_and_test(&nv_linux_workqueue_pending))
++            wake_up_all(&nv_linux_workqueue_wait);
++    }
++
++    return ret;
++}
++
++static inline void nv_linux_workqueue_complete(void)
++{
++    if (atomic_dec_and_test(&nv_linux_workqueue_pending))
++        wake_up_all(&nv_linux_workqueue_wait);
++}
++
++static inline void nv_linux_workqueue_flush(void)
++{
++    wait_event(nv_linux_workqueue_wait,
++               atomic_read(&nv_linux_workqueue_pending) == 0);
++}
++
++#define NV_WORKQUEUE_SCHEDULE(work) nv_linux_workqueue_schedule(work)
++#define NV_WORKQUEUE_COMPLETE() nv_linux_workqueue_complete()
++#define NV_WORKQUEUE_FLUSH() nv_linux_workqueue_flush()
+ #if (NV_INIT_WORK_ARGUMENT_COUNT == 2)
+ #define NV_WORKQUEUE_INIT(tq,handler,data)             \
+     {                                                  \
+--- a/nvidia/nv.c
++++ b/nvidia/nv.c
+@@ -43,6 +43,9 @@
+ static NvU32 num_nv_devices = 0;
+ NvU32 num_probed_nv_devices = 0;
+
++atomic_t nv_linux_workqueue_pending = ATOMIC_INIT(0);
++DECLARE_WAIT_QUEUE_HEAD(nv_linux_workqueue_wait);
++
+ NvU32 nv_assign_gpu_count = 0;
+ nv_pci_info_t nv_assign_gpu_pci_info[NV_MAX_DEVICES];
+
+--- a/nvidia/nv-gvi.c
++++ b/nvidia/nv-gvi.c
+@@ -53,6 +53,8 @@ void nv_gvi_kern_bh(
+     nv  = NV_STATE_PTR(nvl);
+
+     rm_gvi_bh(nvl->sp[NV_DEV_STACK_ISR_BH], nv);
++
++    NV_WORKQUEUE_COMPLETE();
+ }
+
+ #if defined(NV_PM_SUPPORT_DEVICE_DRIVER_MODEL)
+--- a/nvidia/os-interface.c
++++ b/nvidia/os-interface.c
+@@ -1044,6 +1044,7 @@ static void os_execute_work_item(
+
+     if (nv_kmem_cache_alloc_stack(&sp) != 0)
+     {
++        NV_WORKQUEUE_COMPLETE();
+         return;
+     }
+
+@@ -1052,6 +1053,8 @@ static void os_execute_work_item(
+     os_free_mem((void *)work);
+
+     nv_kmem_cache_free_stack(sp);
++
++    NV_WORKQUEUE_COMPLETE();
+ }
+
+ NV_STATUS NV_API_CALL os_queue_work_item(
