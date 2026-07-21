@@ -37,7 +37,7 @@
  glNamedBufferStorageMemEXT@Base 384.69
  glPolygonOffsetClamp@Base 387
  glQueryResourceNV@Base 387
-#MISSING: 387# glQueryResourceNVX@Base 355
+ glQueryResourceNVX@Base 367.134
  glQueryResourceTagNV@Base 387
  glScissorArrayvOES@Base 378
  glScissorIndexedOES@Base 378
@@ -47,7 +47,7 @@
  glSignalVkFenceNV@Base 364
  glSignalVkSemaphoreNV@Base 364
  glSpecializeShader@Base 387
- glSpecializeShaderARB@Base 367.36.02
+#MISSING: 367.134# glSpecializeShaderARB@Base 367.36.02
  glTexStorageMem1DEXT@Base 384.69
  glTexStorageMem2DEXT@Base 384.69
  glTexStorageMem2DMultisampleEXT@Base 384.69

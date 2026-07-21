@@ -377,22 +377,50 @@ set +e
         echo no > /work/logs/kernel-module-build-complete.txt
     fi
     printf '%s\n' "$suite" > /work/logs/kernel-module-build-suite.txt
-    if grep -Eq 'dh_install|debian/rules binary|override_dh_install' /work/logs/binary-build.log; then
+    if grep -Eq '(^|[[:space:]])dh_install([[:space:]]|$)|override_dh_install|debian/rules binary' /work/logs/binary-build.log; then
+        echo yes > /work/logs/dh-install-command-reached.txt
         echo yes > /work/logs/dh-install-reached.txt
     else
+        echo no > /work/logs/dh-install-command-reached.txt
         echo no > /work/logs/dh-install-reached.txt
     fi
-    if grep -Eq 'dh_missing|fail-missing' /work/logs/binary-build.log; then
+    if grep -Eq '(^|[[:space:]])dh_missing([[:space:]]|$)|--fail-missing|fail-missing' /work/logs/binary-build.log; then
+        echo yes > /work/logs/dh-missing-reached.txt
         echo yes > /work/logs/binary-packaging-reached.txt
     else
+        echo no > /work/logs/dh-missing-reached.txt
         echo no > /work/logs/binary-packaging-reached.txt
     fi
-    if grep -Eq 'dh_install.*(error|missing)|cannot stat|missing files' /work/logs/binary-build.log; then
-        echo no > /work/logs/dh-install-complete.txt
-    elif grep -qx yes /work/logs/dh-install-reached.txt; then
-        echo yes > /work/logs/dh-install-complete.txt
+    sed -n '/dh_missing/,$p' /work/logs/binary-build.log > /work/logs/dh-missing.log || true
+    awk '
+        /The following files are not installed/ { capture=1; next }
+        capture && /^$/ { capture=0 }
+        capture && $0 !~ /^dh_missing/ && $0 !~ /^	/ {
+            gsub(/^[[:space:]]+|[[:space:]]+$/, "", $0)
+            if ($0 != "") print $0
+        }
+    ' /work/logs/binary-build.log > /work/logs/dh-missing-unowned-files.txt || true
+    if grep -Eq 'dh_install: error|dh_install:.*missing|cannot stat' /work/logs/binary-build.log; then
+        echo no > /work/logs/dh-install-command-complete.txt
+    elif grep -qx yes /work/logs/dh-install-command-reached.txt && { grep -qx yes /work/logs/dh-missing-reached.txt || [ "$binary_status" -eq 0 ]; }; then
+        echo yes > /work/logs/dh-install-command-complete.txt
+    elif grep -qx yes /work/logs/dh-install-command-reached.txt; then
+        echo unknown > /work/logs/dh-install-command-complete.txt
     else
-        echo unknown > /work/logs/dh-install-complete.txt
+        echo unknown > /work/logs/dh-install-command-complete.txt
+    fi
+    cp /work/logs/dh-install-command-complete.txt /work/logs/dh-install-complete.txt
+    if grep -qx yes /work/logs/dh-missing-reached.txt; then
+        if grep -Eq 'dh_missing: error|not installed|missing files' /work/logs/binary-build.log || test -s /work/logs/dh-missing-unowned-files.txt; then
+            echo 1 > /work/logs/dh-missing.exit
+            echo no > /work/logs/dh-missing-complete.txt
+        else
+            echo 0 > /work/logs/dh-missing.exit
+            echo yes > /work/logs/dh-missing-complete.txt
+        fi
+    else
+        echo unknown > /work/logs/dh-missing.exit
+        echo unknown > /work/logs/dh-missing-complete.txt
     fi
     if grep -Eq 'yes' /work/logs/module-c-compiler-reached.txt /work/logs/module-linker-reached.txt /work/logs/modpost-reached.txt; then
         echo yes > /work/logs/kernel-compilation-reached.txt
