@@ -1,0 +1,109 @@
+Description: fix scatter-gather allocation conftests
+ Probe the exact sg_alloc_table() and sg_alloc_table_from_pages() callable
+ interfaces and retain per-probe diagnostics without fabricating results.
+Origin: backport, NVIDIA/Debian conftest maintenance adapted to 367.134
+Forwarded: not-needed
+Last-Update: 2026-07-20
+
+--- a/conftest.sh	2026-07-20 09:34:57.346829295 +0000
++++ b/conftest.sh	2026-07-20 09:34:58.018826313 +0000
+@@ -1321,39 +1321,76 @@
+         sg_alloc_table)
+             #
+             # Determine if include/linux/scatterlist.h exists and which table
+-            # allocation functions are present if so.
++            # allocation functions are present if so.  These probes compile the
++            # exact callable interfaces used by 367.134; they must not use the
++            # inverted "functions" category because a successful prototype match
++            # is the positive result for these allocation helpers.
+             #
+-            echo "$CONFTEST_PREAMBLE
+-            #include <linux/scatterlist.h>
+-            int conftest_sg_alloc_table(void) {
+-            }" > conftest$$.c
+-
+-            $CC $CFLAGS -c conftest$$.c > /dev/null 2>&1
+-            rm -f conftest$$.c
++            sg_diag_dir="conftest-sg-diagnostics"
++            mkdir -p "$sg_diag_dir"
+ 
+-            if [ ! -f conftest$$.o ]; then
+-                echo "#undef NV_SG_ALLOC_TABLE_PRESENT" | append_conftest "functions"
+-                echo "#undef NV_SG_ALLOC_TABLE_FROM_PAGES_PRESENT" | append_conftest "functions"
+-                return
+-            fi
+-            
+-            rm -f conftest$$.o
++            nv_sg_compile_probe()
++            {
++                name="$1"
++                def="$2"
++                code="$3"
++                src="conftest$$-${name}.c"
++                obj="conftest$$-${name}.o"
++                stdout="$sg_diag_dir/${name}.stdout.txt"
++                stderr="$sg_diag_dir/${name}.stderr.txt"
++
++                echo "$CONFTEST_PREAMBLE
++                $code" > "$src"
++                cp "$src" "$sg_diag_dir/${name}.source.c"
++                printf '%s\n' "$CC $CFLAGS -c $src -o $obj" > "$sg_diag_dir/${name}.command.txt"
++                pwd > "$sg_diag_dir/${name}.cwd.txt"
++                printf '%s\n' "$CC" > "$sg_diag_dir/${name}.compiler.txt"
++
++                $CC $CFLAGS -c "$src" -o "$obj" > "$stdout" 2> "$stderr"
++                status=$?
++                printf '%s\n' "$status" > "$sg_diag_dir/${name}.exit.txt"
++                if [ -f "$obj" ]; then
++                    echo yes > "$sg_diag_dir/${name}.object-created.txt"
++                    rm -f "$obj"
++                else
++                    echo no > "$sg_diag_dir/${name}.object-created.txt"
++                fi
++                rm -f "$src"
++
++                if [ "$status" -eq 0 ] && grep -Fx yes "$sg_diag_dir/${name}.object-created.txt" >/dev/null; then
++                    echo "#define ${def}" | append_conftest "types"
++                    echo "#define ${def}" > "$sg_diag_dir/${name}.definition.txt"
++                else
++                    echo "#undef ${def}" | append_conftest "types"
++                    echo "#undef ${def}" > "$sg_diag_dir/${name}.definition.txt"
++                fi
++            }
+ 
+             CODE="
+             #include <linux/scatterlist.h>
+-            int conftest_sg_alloc_table(void) {
+-                sg_alloc_table();
++            #include <linux/mm.h>
++            int conftest_sg_alloc_table(struct sg_table *table,
++                                         unsigned int nents,
++                                         gfp_t gfp)
++            {
++                return sg_alloc_table(table, nents, gfp);
+             }"
+-
+-            compile_check_conftest "$CODE" "NV_SG_ALLOC_TABLE_PRESENT" "" "functions"
++            nv_sg_compile_probe "sg_alloc_table" "NV_SG_ALLOC_TABLE_PRESENT" "$CODE"
+ 
+             CODE="
+             #include <linux/scatterlist.h>
+-            void conftest_sg_alloc_table_from_pages(void) {
+-                sg_alloc_table_from_pages();
++            #include <linux/mm.h>
++            int conftest_sg_alloc_table_from_pages(struct sg_table *table,
++                                                    struct page **pages,
++                                                    unsigned int n_pages,
++                                                    unsigned int offset,
++                                                    unsigned long size,
++                                                    gfp_t gfp)
++            {
++                return sg_alloc_table_from_pages(table, pages, n_pages,
++                                                 offset, size, gfp);
+             }"
+-
+-            compile_check_conftest "$CODE" "NV_SG_ALLOC_TABLE_FROM_PAGES_PRESENT" "" "functions"
++            nv_sg_compile_probe "sg_alloc_table_from_pages" "NV_SG_ALLOC_TABLE_FROM_PAGES_PRESENT" "$CODE"
+         ;;
+ 
+         efi_enabled)

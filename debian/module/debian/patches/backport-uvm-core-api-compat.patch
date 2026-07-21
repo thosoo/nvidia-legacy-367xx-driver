@@ -1,0 +1,104 @@
+--- a/common/inc/nv.h
++++ b/common/inc/nv.h
+@@ -15,0 +16,2 @@
++#include "nvstatus.h"
++#include "nv-misc.h"
+--- a/conftest.sh
++++ b/conftest.sh
+@@ -316,0 +317,41 @@ procfs_compile_check_conftest() {
++dependency_barrier_compile_check_conftest() {
++    CODE="$1"
++    DEF="$2"
++    VAL="$3"
++    CAT="$4"
++    NAME=$(printf '%s' "$DEF" | tr 'A-Z' 'a-z')
++    DIAGDIR=conftest-dependency-barrier-diagnostics
++    SRC=conftest$$.c
++    OBJ=conftest$$.o
++    mkdir -p "$DIAGDIR"
++    rm -f "$OBJ"
++    echo "$CONFTEST_PREAMBLE
++    $CODE" > "$SRC"
++    printf '%s
++' "$CC" > "$DIAGDIR/$NAME.compiler.txt"
++    pwd > "$DIAGDIR/$NAME.cwd.txt"
++    cp "$SRC" "$DIAGDIR/$NAME.source.c"
++    printf '%s
++' "$CC $CFLAGS -Werror=implicit-function-declaration -Werror=incompatible-pointer-types -Werror=return-type -c $SRC" > "$DIAGDIR/$NAME.command.txt"
++    set +e
++    $CC $CFLAGS -Werror=implicit-function-declaration -Werror=incompatible-pointer-types -Werror=return-type -c "$SRC" > "$DIAGDIR/$NAME.stdout.txt" 2> "$DIAGDIR/$NAME.stderr.txt"
++    STATUS=$?
++    set -e
++    printf '%s
++' "$STATUS" > "$DIAGDIR/$NAME.exit.txt"
++    if [ "$STATUS" -eq 0 ] && [ -f "$OBJ" ]; then
++        echo yes > "$DIAGDIR/$NAME.object-created.txt"
++        rm -f "$OBJ"
++        echo "#define ${DEF} ${VAL}" | append_conftest "${CAT}"
++        echo "#define ${DEF} ${VAL}" > "$DIAGDIR/$NAME.definition.txt"
++        echo "smp_read_barrier_depends" > "$DIAGDIR/selected-implementation.txt"
++    else
++        echo no > "$DIAGDIR/$NAME.object-created.txt"
++        rm -f "$OBJ"
++        echo "#undef ${DEF}" | append_conftest "${CAT}"
++        echo "#undef ${DEF}" > "$DIAGDIR/$NAME.definition.txt"
++        echo "implicit dependency ordering" > "$DIAGDIR/selected-implementation.txt"
++    fi
++    rm -f "$SRC"
++}
++
+@@ -1903,0 +1945,10 @@ compile_test() {
++        ;;
++
++        smp_read_barrier_depends)
++            CODE="
++            #include <asm/barrier.h>
++            void conftest_smp_read_barrier_depends(void)
++            {
++                smp_read_barrier_depends();
++            }"
++            dependency_barrier_compile_check_conftest "$CODE" "NV_SMP_READ_BARRIER_DEPENDS_PRESENT" "" "types"
+--- a/nvidia-uvm/nvidia-uvm.Kbuild
++++ b/nvidia-uvm/nvidia-uvm.Kbuild
+@@ -126,0 +127 @@ NV_CONFTEST_FUNCTION_COMPILE_TESTS += mm
++NV_CONFTEST_FUNCTION_COMPILE_TESTS += smp_read_barrier_depends
+--- a/nvidia-uvm/uvm8.c
++++ b/nvidia-uvm/uvm8.c
+@@ -102 +102 @@ static void uvm_destroy_vma_semaphore_po
+-static int uvm_vm_fault_sigbus(struct vm_area_struct *vma, struct vm_fault *vmf)
++static vm_fault_t uvm_vm_fault_sigbus(struct vm_area_struct *vma, struct vm_fault *vmf)
+@@ -109 +109 @@ static int uvm_vm_fault_sigbus(struct vm
+-static int uvm_vm_fault_sigbus_wrapper(struct vm_fault *vmf)
++static vm_fault_t uvm_vm_fault_sigbus_wrapper(struct vm_fault *vmf)
+@@ -327 +327 @@ static void uvm_vm_close_managed(struct
+-static int uvm_vm_fault(struct vm_area_struct *vma, struct vm_fault *vmf)
++static vm_fault_t uvm_vm_fault(struct vm_area_struct *vma, struct vm_fault *vmf)
+@@ -426 +426 @@ convert_error:
+-static int uvm_vm_fault_wrapper(struct vm_fault *vmf)
++static vm_fault_t uvm_vm_fault_wrapper(struct vm_fault *vmf)
+--- a/nvidia-uvm/uvm8_tools.c
++++ b/nvidia-uvm/uvm8_tools.c
+@@ -160 +160 @@ static uvm_tools_event_tracker_t *tools_
+-    smp_read_barrier_depends();
++    uvm_read_dependency_barrier();
+--- a/nvidia-uvm/uvm8_va_range.h
++++ b/nvidia-uvm/uvm8_va_range.h
+@@ -706 +706 @@ static uvm_va_block_t *uvm_va_range_bloc
+-    smp_read_barrier_depends();
++    uvm_read_dependency_barrier();
+--- a/nvidia-uvm/uvm_linux.h
++++ b/nvidia-uvm/uvm_linux.h
+@@ -51,0 +52,13 @@
++static inline void uvm_read_dependency_barrier(void)
++{
++#if defined(NV_SMP_READ_BARRIER_DEPENDS_PRESENT)
++    smp_read_barrier_depends();
++#else
++    /*
++     * Linux removed smp_read_barrier_depends() after making dependency
++     * ordering implicit on supported architectures. This 367xx package is
++     * amd64-only, and the protected loads use atomic_long_read().
++     */
++#endif
++}
++

@@ -1,17 +1,17 @@
 #include "libgl1-nvidia-glx.symbols.common"
-#MISSING: 390.141# AllocExecPages@Base 361
+ AllocExecPages@Base 367.134
  FindNextStringToken@Base 375
-#MISSING: 390.141# FreeExecPages@Base 361
+ FreeExecPages@Base 367.134
  IntersectionExtensionStrings@Base 375.20
  IsTokenInString@Base 375
  SplitString@Base 375
  UnionExtensionStrings@Base 375.20
-#MISSING: 384.111# __glXWrapperInit@Base 361
- (arch=ppc64el)entry_generate_default_code@Base 361
+ __glXWrapperInit@Base 367.134
+ entry_generate_default_code@Base 361
  entry_get_patch_address@Base 390.141
-#MISSING: 390.141# entry_get_patch_addresses@Base 361
+ entry_get_patch_addresses@Base 367.134
  entry_get_public@Base 361
-#MISSING: 390.141# entry_init_public@Base 361
+ entry_init_public@Base 367.134
  entry_patch_finish@Base 361
  entry_patch_start@Base 361
  entry_restore_entrypoints@Base 390.141
@@ -441,7 +441,7 @@
  glMultiDrawArraysIndirectCount@Base 390.116
  glMultiDrawElementArrayAPPLE@Base 361
  glMultiDrawElementsBaseVertexEXT@Base 361
-#MISSING: 390.116# glMultiDrawElementsBaseVertexOES@Base 361
+ glMultiDrawElementsBaseVertexOES@Base 367.134
  glMultiDrawElementsIndirectCount@Base 390.116
  glMultiDrawMeshTasksIndirectCountNV@Base 390.141
  glMultiDrawMeshTasksIndirectNV@Base 390.141
@@ -884,7 +884,7 @@
 #MISSING: 361.45# public_entry_start@Base 361
  stub_cleanup@Base 390.141
  stub_find_public@Base 361
-#MISSING: 390.141# stub_get_addr@Base 361
-#MISSING: 381.22# stub_get_name@Base 361
+ stub_get_addr@Base 367.134
+ stub_get_name@Base 367.134
  stub_get_patch_callbacks@Base 361
-#MISSING: 390.141# stub_get_slot@Base 361
+ stub_get_slot@Base 367.134

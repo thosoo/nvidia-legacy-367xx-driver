@@ -1,0 +1,130 @@
+Description: handle void-return SMP broadcast helpers
+ Linux 5.3 changed on_each_cpu() to return void.  Probe return assignability
+ for both NVIDIA SMP wrappers so legacy kernels keep real error returns while
+ modern kernels return deterministic zero after performing the call.
+Origin: backport, Debian 340xx 0008-on-each-cpu-5.3.patch and 390xx pattern
+Forwarded: not-needed
+Last-Update: 2026-07-20
+
+--- a/conftest.sh	2026-07-20 08:48:00.950593756 +0000
++++ b/conftest.sh	2026-07-20 08:48:01.766580785 +0000
+@@ -2957,6 +2957,34 @@
+             compile_check_conftest "$CODE" "NV_VMALLOC_HAS_PGPROT_T_ARG" "" "types"
+         ;;
+ 
++        on_each_cpu_returns_int)
++            CODE="
++            #include <linux/smp.h>
++
++            static void conftest_func(void *info) { }
++
++            int conftest_on_each_cpu_returns_int(void) {
++                int ret = on_each_cpu(conftest_func, NULL, 1);
++                return ret;
++            }"
++
++            compile_check_conftest "$CODE" "NV_ON_EACH_CPU_RETURNS_INT" "" "types"
++        ;;
++
++        smp_call_function_returns_int)
++            CODE="
++            #include <linux/smp.h>
++
++            static void conftest_func(void *info) { }
++
++            int conftest_smp_call_function_returns_int(void) {
++                int ret = smp_call_function(conftest_func, NULL, 1);
++                return ret;
++            }"
++
++            compile_check_conftest "$CODE" "NV_SMP_CALL_FUNCTION_RETURNS_INT" "" "types"
++        ;;
++
+         # When adding a new conftest entry, please use the correct format for
+         # specifying the relevant upstream Linux kernel commit.
+         #
+--- a/nvidia/nvidia.Kbuild	2026-07-20 08:48:00.950593756 +0000
++++ b/nvidia/nvidia.Kbuild	2026-07-20 08:48:01.770580722 +0000
+@@ -165,6 +165,8 @@
+ NV_CONFTEST_TYPE_COMPILE_TESTS += dma_ops
+ NV_CONFTEST_TYPE_COMPILE_TESTS += dma_map_ops
+ NV_CONFTEST_TYPE_COMPILE_TESTS += vmalloc_has_pgprot_t_arg
++NV_CONFTEST_TYPE_COMPILE_TESTS += on_each_cpu_returns_int
++NV_CONFTEST_TYPE_COMPILE_TESTS += smp_call_function_returns_int
+ NV_CONFTEST_TYPE_COMPILE_TESTS += noncoherent_swiotlb_dma_ops
+ NV_CONFTEST_TYPE_COMPILE_TESTS += vm_fault_present
+ 
+--- a/common/inc/nv-linux.h	2026-07-20 08:48:00.958593630 +0000
++++ b/common/inc/nv-linux.h	2026-07-20 08:48:01.770580722 +0000
+@@ -784,17 +784,33 @@
+ 
+ #if defined(NV_SMP_CALL_FUNCTION_PRESENT)
+ #if (NV_SMP_CALL_FUNCTION_ARGUMENT_COUNT == 4)
+-#define NV_SMP_CALL_FUNCTION(func, info, wait)               \
++# if defined(NV_SMP_CALL_FUNCTION_RETURNS_INT)
++#  define NV_SMP_CALL_FUNCTION(func, info, wait)             \
+     ({                                                       \
+         int __ret = smp_call_function(func, info, 1, wait);  \
+         __ret;                                               \
+      })
++# else
++#  define NV_SMP_CALL_FUNCTION(func, info, wait)             \
++    ({                                                       \
++        smp_call_function(func, info, 1, wait);              \
++        0;                                                   \
++     })
++# endif
+ #elif (NV_SMP_CALL_FUNCTION_ARGUMENT_COUNT == 3)
+-#define NV_SMP_CALL_FUNCTION(func, info, wait)               \
++# if defined(NV_SMP_CALL_FUNCTION_RETURNS_INT)
++#  define NV_SMP_CALL_FUNCTION(func, info, wait)             \
+     ({                                                       \
+         int __ret = smp_call_function(func, info, wait);     \
+         __ret;                                               \
+      })
++# else
++#  define NV_SMP_CALL_FUNCTION(func, info, wait)             \
++    ({                                                       \
++        smp_call_function(func, info, wait);                 \
++        0;                                                   \
++     })
++# endif
+ #else
+ #error "NV_SMP_CALL_FUNCTION_ARGUMENT_COUNT value unrecognized!"
+ #endif
+@@ -804,17 +820,33 @@
+ 
+ #if defined(NV_ON_EACH_CPU_PRESENT)
+ #if (NV_ON_EACH_CPU_ARGUMENT_COUNT == 4)
+-#define NV_ON_EACH_CPU(func, info, wait)               \
++# if defined(NV_ON_EACH_CPU_RETURNS_INT)
++#  define NV_ON_EACH_CPU(func, info, wait)             \
+     ({                                                 \
+         int __ret = on_each_cpu(func, info, 1, wait);  \
+         __ret;                                         \
+      })
++# else
++#  define NV_ON_EACH_CPU(func, info, wait)             \
++    ({                                                 \
++        on_each_cpu(func, info, 1, wait);              \
++        0;                                             \
++     })
++# endif
+ #elif (NV_ON_EACH_CPU_ARGUMENT_COUNT == 3)
+-#define NV_ON_EACH_CPU(func, info, wait)               \
++# if defined(NV_ON_EACH_CPU_RETURNS_INT)
++#  define NV_ON_EACH_CPU(func, info, wait)             \
+     ({                                                 \
+         int __ret = on_each_cpu(func, info, wait);     \
+         __ret;                                         \
+      })
++# else
++#  define NV_ON_EACH_CPU(func, info, wait)             \
++    ({                                                 \
++        on_each_cpu(func, info, wait);                 \
++        0;                                             \
++     })
++# endif
+ #else
+ #error "NV_ON_EACH_CPU_ARGUMENT_COUNT value unrecognized!"
+ #endif

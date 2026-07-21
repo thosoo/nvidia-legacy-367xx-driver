@@ -1728,7 +1728,7 @@ libnvidia-eglcore.so.#VERSION# libnvidia-eglcore-#VERSION#, #PACKAGE# #MINVER#
  _glQueryCounterEXT@Base 346
  _glQueryCounterNV@Base 346
  _glQueryResourceNV@Base 387
-#MISSING: 387# _glQueryResourceNVX@Base 355
+ _glQueryResourceNVX@Base 367.134
  _glQueryResourceTagNV@Base 387
  _glRasterPos2d@Base 346
  _glRasterPos2dv@Base 346
@@ -1869,7 +1869,7 @@ libnvidia-eglcore.so.#VERSION# libnvidia-eglcore-#VERSION#, #PACKAGE# #MINVER#
  _glSignalVkFenceNV@Base 364
  _glSignalVkSemaphoreNV@Base 364
  _glSpecializeShader@Base 387
- _glSpecializeShaderARB@Base 367.36.02
+#MISSING: 367.134# _glSpecializeShaderARB@Base 367.36.02
  _glStateCaptureNV@Base 346
  _glStencilFillPathInstancedNV@Base 346
  _glStencilFillPathNV@Base 346

@@ -1726,7 +1726,7 @@ libGLX_nvidia.so.0 #PACKAGE# #MINVER#
  glQueryCounterEXT@Base 361.28
  glQueryCounterNV@Base 361.28
  glQueryResourceNV@Base 387
-#MISSING: 387# glQueryResourceNVX@Base 361.28
+ glQueryResourceNVX@Base 367.134
  glQueryResourceTagNV@Base 387
  glRasterPos2d@Base 361.28
  glRasterPos2dv@Base 361.28
@@ -1867,7 +1867,7 @@ libGLX_nvidia.so.0 #PACKAGE# #MINVER#
  glSignalVkFenceNV@Base 364
  glSignalVkSemaphoreNV@Base 364
  glSpecializeShader@Base 387
- glSpecializeShaderARB@Base 367.36.02
+#MISSING: 367.134# glSpecializeShaderARB@Base 367.36.02
  glStateCaptureNV@Base 361.28
  glStencilFillPathInstancedNV@Base 361.28
  glStencilFillPathNV@Base 361.28

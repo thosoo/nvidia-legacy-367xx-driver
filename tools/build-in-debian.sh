@@ -124,12 +124,61 @@ printf '%s\n' "$pci_status" > /work/logs/supported-pci-ids.exit
 test "$pci_status" -eq 0
 
 cd /work/packaging
-tests/no-390xx-leaks.sh
-tests/amd64-only.sh
-tests/no-proprietary-artifacts.sh
-tests/generated-control-drift.sh
-tests/license-367xx.sh
-tests/supported-pci-ids.sh
+
+run_repository_test()
+{
+    name=$1
+    shift
+
+    set +e
+    "$@" > "/work/logs/test-${name}.log" 2>&1
+    status=$?
+    set -e
+
+    cat "/work/logs/test-${name}.log"
+    printf '%s\n' "$status" > "/work/logs/test-${name}.exit"
+    if [ "$status" -ne 0 ]; then
+        printf '%s\n' "$name" > /work/logs/failed-repository-test.txt
+        return "$status"
+    fi
+}
+
+set_stage repository-tests
+run_repository_test no-390xx-leaks tests/no-390xx-leaks.sh
+run_repository_test no-390xx-leaks-regression tests/no-390xx-leaks-regression.sh
+run_repository_test amd64-only tests/amd64-only.sh
+run_repository_test no-proprietary-artifacts tests/no-proprietary-artifacts.sh
+run_repository_test generated-control-drift tests/generated-control-drift.sh
+run_repository_test license-367xx tests/license-367xx.sh
+run_repository_test supported-pci-ids tests/supported-pci-ids.sh
+run_repository_test vmalloc-signature tests/vmalloc-signature.sh
+run_repository_test ioremap-nocache tests/ioremap-nocache.sh
+run_repository_test smp-call-return-type tests/smp-call-return-type.sh
+run_repository_test swiotlb-detection tests/swiotlb-detection.sh
+run_repository_test sg-allocation-conftest tests/sg-allocation-conftest.sh
+run_repository_test acpi-api-compat tests/acpi-api-compat.sh
+run_repository_test dma-mask-api tests/dma-mask-api.sh
+run_repository_test procfs-api-compat tests/procfs-api-compat.sh
+run_repository_test timekeeping-api-compat tests/timekeeping-api-compat.sh
+run_repository_test scheduler-state-api tests/scheduler-state-api.sh
+run_repository_test mmap-lock-api tests/mmap-lock-api.sh
+run_repository_test uvm-mmap-lock-api tests/uvm-mmap-lock-api.sh
+run_repository_test uvm-vm-fault-api tests/uvm-vm-fault-api.sh
+run_repository_test uvm-dependency-barrier tests/uvm-dependency-barrier.sh
+run_repository_test uvm-interface-header-order tests/uvm-interface-header-order.sh
+run_repository_test drm-preprocessor-balance-fixtures tests/drm-preprocessor-balance.sh
+run_repository_test userspace-manifest-inventory-fixtures tests/userspace-manifest-inventory.sh
+run_repository_test module-build-diagnostics tests/module-build-diagnostics.sh
+run_repository_test userspace-manifest-inventory tests/userspace-manifest-inventory.sh "/work/import/NVIDIA-Linux-x86_64-$version"
+
+set_stage module-series-integrity
+module_integrity_tree=$(tools/prepare-kernel-tree.sh "$suite" /work/module-series-integrity)
+printf '%s\n' "$module_integrity_tree" > /work/logs/module-series-integrity-tree.txt
+run_repository_test module-patch-integrity-pr5 tests/module-patch-integrity.sh "$module_integrity_tree"
+run_repository_test module-patch-integrity-full tests/module-patch-integrity.sh --full-series "$module_integrity_tree"
+run_repository_test patch-series-position tests/patch-series-position.sh "$module_integrity_tree"
+run_repository_test drm-preprocessor-balance tests/drm-preprocessor-balance.sh "$module_integrity_tree"
+run_repository_test uvm-mmap-lock-api-series tests/uvm-mmap-lock-api.sh "$module_integrity_tree"
 
 set_stage source-build
 set +e
@@ -195,7 +244,7 @@ fi
 set +e
 : > /work/logs/post-build-diagnostics-failures.txt
 {
-    PS4='+diagnostics:${LINENO}: '
+    PS4='+diagnostics: '
     set -x
 
     find /work/binary-source -type f -name '*.rej' -print > /work/logs/quilt-reject-files.txt || \
@@ -292,20 +341,141 @@ set +e
     else
         echo no > /work/logs/module-c-compiler-reached.txt
     fi
-    if grep -Eq '(^|[[:space:]])LD[[:space:]]+\[M\]' /work/logs/binary-build.log; then
+    for module_name in nvidia nvidia-modeset nvidia-drm nvidia-uvm; do
+        if test -s "$module_source/${module_name}.ko"; then
+            echo yes > "/work/logs/${module_name}-ko-created.txt"
+        else
+            echo no > "/work/logs/${module_name}-ko-created.txt"
+        fi
+    done
+    if test -s "$module_source/modules.order"; then
+        echo yes > /work/logs/modules-order-created.txt
+    else
+        echo no > /work/logs/modules-order-created.txt
+    fi
+    if test -s "$module_source/Module.symvers"; then
+        echo yes > /work/logs/module-symvers-created.txt
+    else
+        echo no > /work/logs/module-symvers-created.txt
+    fi
+    if grep -Eq '(^|[[:space:]])LD[[:space:]]+\[M\]|ld[[:space:]].*-o[[:space:]][^[:space:]]*kernel-source-tree/(nvidia|nvidia-modeset|nvidia-drm|nvidia-uvm)\.ko' /work/logs/binary-build.log || \
+       grep -qx yes /work/logs/nvidia-ko-created.txt && grep -qx yes /work/logs/nvidia-modeset-ko-created.txt && grep -qx yes /work/logs/nvidia-drm-ko-created.txt && grep -qx yes /work/logs/nvidia-uvm-ko-created.txt; then
         echo yes > /work/logs/module-linker-reached.txt
     else
         echo no > /work/logs/module-linker-reached.txt
     fi
-    if grep -Eq '(^|[[:space:]])MODPOST([[:space:]]|$)' /work/logs/binary-build.log; then
+    if grep -Eq '(^|[[:space:]])MODPOST([[:space:]]|$)|scripts/Makefile\.modpost' /work/logs/binary-build.log || test -s "$module_source/Module.symvers"; then
         echo yes > /work/logs/modpost-reached.txt
     else
         echo no > /work/logs/modpost-reached.txt
+    fi
+    if grep -qx yes /work/logs/nvidia-ko-created.txt && grep -qx yes /work/logs/nvidia-modeset-ko-created.txt && \
+       grep -qx yes /work/logs/nvidia-drm-ko-created.txt && grep -qx yes /work/logs/nvidia-uvm-ko-created.txt && \
+       grep -qx yes /work/logs/modules-order-created.txt; then
+        echo yes > /work/logs/kernel-module-build-complete.txt
+    else
+        echo no > /work/logs/kernel-module-build-complete.txt
+    fi
+    printf '%s\n' "$suite" > /work/logs/kernel-module-build-suite.txt
+    if grep -Eq '(^|[[:space:]])dh_install([[:space:]]|$)|override_dh_install|debian/rules binary' /work/logs/binary-build.log; then
+        echo yes > /work/logs/dh-install-command-reached.txt
+        echo yes > /work/logs/dh-install-reached.txt
+    else
+        echo no > /work/logs/dh-install-command-reached.txt
+        echo no > /work/logs/dh-install-reached.txt
+    fi
+    if grep -Eq '(^|[[:space:]])dh_missing([[:space:]]|$)|--fail-missing|fail-missing' /work/logs/binary-build.log; then
+        echo yes > /work/logs/dh-missing-reached.txt
+        echo yes > /work/logs/binary-packaging-reached.txt
+    else
+        echo no > /work/logs/dh-missing-reached.txt
+        echo no > /work/logs/binary-packaging-reached.txt
+    fi
+    sed -n '/dh_missing/,$p' /work/logs/binary-build.log > /work/logs/dh-missing.log || true
+    awk '
+        /The following files are not installed/ { capture=1; next }
+        capture && /^$/ { capture=0 }
+        capture && $0 !~ /^dh_missing/ && $0 !~ /^	/ {
+            gsub(/^[[:space:]]+|[[:space:]]+$/, "", $0)
+            if ($0 != "") print $0
+        }
+    ' /work/logs/binary-build.log > /work/logs/dh-missing-unowned-files.txt || true
+    if grep -Eq 'dh_install: error|dh_install:.*missing|cannot stat' /work/logs/binary-build.log; then
+        echo no > /work/logs/dh-install-command-complete.txt
+    elif grep -qx yes /work/logs/dh-install-command-reached.txt && { grep -qx yes /work/logs/dh-missing-reached.txt || [ "$binary_status" -eq 0 ]; }; then
+        echo yes > /work/logs/dh-install-command-complete.txt
+    elif grep -qx yes /work/logs/dh-install-command-reached.txt; then
+        echo unknown > /work/logs/dh-install-command-complete.txt
+    else
+        echo unknown > /work/logs/dh-install-command-complete.txt
+    fi
+    cp /work/logs/dh-install-command-complete.txt /work/logs/dh-install-complete.txt
+    if grep -qx yes /work/logs/dh-missing-reached.txt; then
+        if grep -Eq 'dh_missing: error|not installed|missing files' /work/logs/binary-build.log || test -s /work/logs/dh-missing-unowned-files.txt; then
+            echo 1 > /work/logs/dh-missing.exit
+            echo no > /work/logs/dh-missing-complete.txt
+        else
+            echo 0 > /work/logs/dh-missing.exit
+            echo yes > /work/logs/dh-missing-complete.txt
+        fi
+    else
+        echo unknown > /work/logs/dh-missing.exit
+        echo unknown > /work/logs/dh-missing-complete.txt
     fi
     if grep -Eq 'yes' /work/logs/module-c-compiler-reached.txt /work/logs/module-linker-reached.txt /work/logs/modpost-reached.txt; then
         echo yes > /work/logs/kernel-compilation-reached.txt
     else
         echo no > /work/logs/kernel-compilation-reached.txt
+    fi
+    if test -d "$module_source/conftest-sg-diagnostics"; then
+        mkdir -p /work/logs/conftest-sg-diagnostics
+        find "$module_source/conftest-sg-diagnostics" -type f \
+            ! -name '*.o' ! -name '*.ko' ! -name '*.cmd' \
+            -exec cp -v {} /work/logs/conftest-sg-diagnostics/ \; \
+            > /work/logs/conftest-sg-diagnostics-files.txt 2>&1 || \
+            echo "copy SG conftest diagnostics failed" >> /work/logs/post-build-diagnostics-failures.txt
+    else
+        echo "no SG conftest diagnostics directory" > /work/logs/conftest-sg-diagnostics-files.txt
+    fi
+    if test -d "$module_source/conftest-pci-dma-diagnostics"; then
+        mkdir -p /work/logs/conftest-pci-dma-diagnostics
+        find "$module_source/conftest-pci-dma-diagnostics" -type f \
+            ! -name '*.o' ! -name '*.ko' ! -name '*.cmd' \
+            -exec cp -v {} /work/logs/conftest-pci-dma-diagnostics/ \; \
+            > /work/logs/conftest-pci-dma-diagnostics-files.txt 2>&1 || \
+            echo "copy PCI DMA conftest diagnostics failed" >> /work/logs/post-build-diagnostics-failures.txt
+    else
+        echo "no PCI DMA conftest diagnostics directory" > /work/logs/conftest-pci-dma-diagnostics-files.txt
+    fi
+    if test -d "$module_source/conftest-procfs-diagnostics"; then
+        mkdir -p /work/logs/conftest-procfs-diagnostics
+        find "$module_source/conftest-procfs-diagnostics" -type f \
+            ! -name '*.o' ! -name '*.ko' ! -name '*.cmd' \
+            -exec cp -v {} /work/logs/conftest-procfs-diagnostics/ \; \
+            > /work/logs/conftest-procfs-diagnostics-files.txt 2>&1 || \
+            echo "copy procfs conftest diagnostics failed" >> /work/logs/post-build-diagnostics-failures.txt
+    else
+        echo "no procfs conftest diagnostics directory" > /work/logs/conftest-procfs-diagnostics-files.txt
+    fi
+    if test -d "$module_source/conftest-timekeeping-diagnostics"; then
+        mkdir -p /work/logs/conftest-timekeeping-diagnostics
+        find "$module_source/conftest-timekeeping-diagnostics" -type f \
+            ! -name '*.o' ! -name '*.ko' ! -name '*.cmd' \
+            -exec cp -v {} /work/logs/conftest-timekeeping-diagnostics/ \; \
+            > /work/logs/conftest-timekeeping-diagnostics-files.txt 2>&1 || \
+            echo "copy timekeeping conftest diagnostics failed" >> /work/logs/post-build-diagnostics-failures.txt
+    else
+        echo "no timekeeping conftest diagnostics directory" > /work/logs/conftest-timekeeping-diagnostics-files.txt
+    fi
+    if test -d "$module_source/conftest-dependency-barrier-diagnostics"; then
+        mkdir -p /work/logs/conftest-dependency-barrier-diagnostics
+        find "$module_source/conftest-dependency-barrier-diagnostics" -type f \
+            ! -name '*.o' ! -name '*.ko' ! -name '*.cmd' \
+            -exec cp -v {} /work/logs/conftest-dependency-barrier-diagnostics/ \; \
+            > /work/logs/conftest-dependency-barrier-diagnostics-files.txt 2>&1 || \
+            echo "copy dependency-barrier conftest diagnostics failed" >> /work/logs/post-build-diagnostics-failures.txt
+    else
+        echo "no dependency-barrier conftest diagnostics directory" > /work/logs/conftest-dependency-barrier-diagnostics-files.txt
     fi
     if test -e glvnd/nvidia_icd.json && test -e nonglvnd/nvidia_icd.json; then
         sh tests/vulkan-icd-json.sh . > /work/logs/vulkan-icd-json.log 2>&1

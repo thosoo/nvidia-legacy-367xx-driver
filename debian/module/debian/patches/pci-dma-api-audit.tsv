@@ -1,0 +1,7 @@
+source file	line or symbol	operation	current PCI compatibility API	modern generic DMA equivalent	device object available	wrapper required	Bookworm/Trixie compiled
+nvidia/nv-dma.c	nv_dma_map_contig	map page	pci_map_page + PCI_DMA_BIDIRECTIONAL	dma_map_page(&pdev->dev, ..., DMA_BIDIRECTIONAL)	dma_map->dev is struct pci_dev *	yes: nv_dma_map_page	yes
+nvidia/nv-dma.c	nv_dma_unmap_contig	unmap page	pci_unmap_page + PCI_DMA_BIDIRECTIONAL	dma_unmap_page(&pdev->dev, ..., DMA_BIDIRECTIONAL)	dma_map->dev is struct pci_dev *	yes: nv_dma_unmap_page	yes
+nvidia/nv-dma.c	nv_map_dma_map_scatterlist	map scatterlist	pci_map_sg + PCI_DMA_BIDIRECTIONAL	dma_map_sg(&pdev->dev, ..., DMA_BIDIRECTIONAL)	dma_map->dev is struct pci_dev *	yes: nv_dma_map_sg	yes
+nvidia/nv-dma.c	nv_unmap_dma_map_scatterlist	unmap scatterlist	pci_unmap_sg + PCI_DMA_BIDIRECTIONAL	dma_unmap_sg(&pdev->dev, ..., DMA_BIDIRECTIONAL)	dma_map->dev is struct pci_dev *	yes: nv_dma_unmap_sg	yes
+nvidia/nv-dma.c	nv_dma_map_contig error path	mapping error	NV_PCI_DMA_MAPPING_ERROR/pci_dma_mapping_error	dma_mapping_error(&pdev->dev, dma_addr)	dma_map->dev is struct pci_dev *	yes: nv_dma_mapping_error	yes
+nvidia/nv.c	nv_dma_is_map_resource_implemented	probe single mapping	pci_map_single/pci_unmap_single/pci_dma_mapping_error	dma_map_single/dma_unmap_single/dma_mapping_error(&pdev->dev,...)	dev is struct pci_dev *	direct generic calls are simple and type-safe	yes

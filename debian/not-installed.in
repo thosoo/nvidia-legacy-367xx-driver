@@ -22,8 +22,9 @@ glxext.h
 # installed by dh_installchangelogs
 NVIDIA_Changelog
 
-# installed after substitution
-nvidia_icd.json.template
+# upstream 367 ICD metadata is not installed directly; packaging generates
+# GLVND and non-GLVND variants from debian/nvidia_icd.json.template.
+nvidia_icd.json
 
 # built from src:nvidia-modprobe
 nvidia-modprobe
@@ -46,15 +47,12 @@ libnvidia-gtk3.so.#VERSION#
 nvidia-xconfig
 nvidia-xconfig.1
 
-# built from src:egl-wayland
-libnvidia-egl-wayland.so.1.*.*
+# EGL-Wayland support is supplied by the separately maintained egl-wayland package;
+# do not install NVIDIA's bundled 367 copy.
+libnvidia-egl-wayland.so.#VERSION#
 10_nvidia_wayland.json
 
 # built from src:libglvnd
-libEGL.so.1.1.0
-libGL.so.1.7.0
-libGLESv1_CM.so.1.2.0
-libGLESv2.so.2.1.0
 libGLX.so.0
 libGLdispatch.so.0
 libOpenGL.so.0
@@ -67,8 +65,12 @@ nvidia-cuda-mps-server
 nvidia-cuda-mps-control
 nvidia-cuda-mps-control.1
 
-# not shipped
-
+# not shipped by the 367.134 packaging layout
 libGL.la
 
+# not shipped by the 367.134 packaging layout
 libnvidia-wfb.so.#VERSION#
+
+# NVIDIA 367.134 does not ship a non-GLVND libEGL.so.#VERSION#;
+# libEGL_nvidia.so.#VERSION# is the GLVND vendor implementation.
+libEGL.so.#VERSION#

@@ -1,0 +1,61 @@
+Description: avoid private SWIOTLB global in nv_dma_maps_swiotlb
+ The legacy global swiotlb is no longer public.  Use a public helper when the
+ kernel provides one and otherwise conservatively report that the driver cannot
+ prove SWIOTLB is active.
+Origin: backport, later NVIDIA/Debian SWIOTLB public-helper direction
+Forwarded: not-needed
+Last-Update: 2026-07-20
+
+--- a/conftest.sh	2026-07-20 08:55:25.638944144 +0000
++++ b/conftest.sh	2026-07-20 08:55:25.718942825 +0000
+@@ -2985,6 +2985,18 @@
+             compile_check_conftest "$CODE" "NV_SMP_CALL_FUNCTION_RETURNS_INT" "" "types"
+         ;;
+ 
++        is_swiotlb_active)
++            CODE="
++            #include <linux/device.h>
++            #include <linux/swiotlb.h>
++
++            int conftest_is_swiotlb_active(struct device *dev) {
++                return is_swiotlb_active(dev);
++            }"
++
++            compile_check_conftest "$CODE" "NV_IS_SWIOTLB_ACTIVE_PRESENT" "" "functions"
++        ;;
++
+         # When adding a new conftest entry, please use the correct format for
+         # specifying the relevant upstream Linux kernel commit.
+         #
+--- a/nvidia/nvidia.Kbuild	2026-07-20 08:55:25.638944144 +0000
++++ b/nvidia/nvidia.Kbuild	2026-07-20 08:55:25.718942825 +0000
+@@ -126,6 +126,7 @@
+ NV_CONFTEST_FUNCTION_COMPILE_TESTS += pci_get_domain_bus_and_slot
+ NV_CONFTEST_FUNCTION_COMPILE_TESTS += get_num_physpages
+ NV_CONFTEST_FUNCTION_COMPILE_TESTS += efi_enabled
++NV_CONFTEST_FUNCTION_COMPILE_TESTS += is_swiotlb_active
+ NV_CONFTEST_FUNCTION_COMPILE_TESTS += proc_create_data
+ NV_CONFTEST_FUNCTION_COMPILE_TESTS += pde_data
+ NV_CONFTEST_FUNCTION_COMPILE_TESTS += proc_remove
+--- a/common/inc/nv-linux.h	2026-07-20 08:55:25.638944144 +0000
++++ b/common/inc/nv-linux.h	2026-07-20 08:55:25.722942759 +0000
+@@ -1547,12 +1547,14 @@
+     #endif
+   #elif defined(NVCPU_X86_64)
+     /*
+-     * Fallback for old 2.6 kernels - if the DMA operations infrastructure
+-     * isn't in place, use the swiotlb flag. Before dma_ops was added, this
+-     * flag used to be exported. It still exists in modern kernels but is no
+-     * longer exported.
++     * The legacy x86_64 fallback read the private swiotlb global.  Modern
++     * kernels no longer export that state to external modules.  Use the public
++     * device-scoped helper when it is available; otherwise keep the conservative
++     * default NV_FALSE rather than declaring private kernel globals.
+      */
+-    swiotlb_in_use = (swiotlb == 1);
++    #if defined(NV_IS_SWIOTLB_ACTIVE_PRESENT)
++    swiotlb_in_use = is_swiotlb_active(&dev->dev);
++    #endif
+   #endif
+ #endif
+ 

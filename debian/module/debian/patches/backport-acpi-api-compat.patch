@@ -1,0 +1,347 @@
+Description: use export-safe ACPI handle traversal on modern kernels
+ Replace direct struct acpi_device child traversal and GPL-only helper calls with
+ acpi_walk_namespace() handle traversal when acpi_device internals are absent.
+Origin: backport, NVIDIA ACPI handle-based compatibility adapted to 367.134
+Forwarded: not-needed
+Last-Update: 2026-07-20
+
+--- a/conftest.sh	2026-07-20 11:32:10.995436288 +0000
++++ b/conftest.sh	2026-07-20 11:32:11.035435975 +0000
+@@ -3034,6 +3034,22 @@
+             compile_check_conftest "$CODE" "NV_IS_SWIOTLB_ACTIVE_PRESENT" "" "functions"
+         ;;
+ 
++        acpi_device_has_children_and_node)
++            CODE="
++            #include <linux/acpi.h>
++            #include <linux/list.h>
++
++            void conftest_acpi_device_has_children_and_node(struct acpi_device *device)
++            {
++                struct list_head *children = &device->children;
++                struct list_head *node = &device->node;
++                (void)children;
++                (void)node;
++            }"
++
++            compile_check_conftest "$CODE" "NV_ACPI_DEVICE_HAS_CHILDREN_AND_NODE" "" "types"
++        ;;
++
+         # When adding a new conftest entry, please use the correct format for
+         # specifying the relevant upstream Linux kernel commit.
+         #
+--- a/nvidia/nvidia.Kbuild	2026-07-20 11:32:10.987436351 +0000
++++ b/nvidia/nvidia.Kbuild	2026-07-20 11:32:11.035435975 +0000
+@@ -118,6 +118,7 @@
+ NV_CONFTEST_FUNCTION_COMPILE_TESTS += ioremap_cache
+ NV_CONFTEST_FUNCTION_COMPILE_TESTS += ioremap_wc
+ NV_CONFTEST_FUNCTION_COMPILE_TESTS += acpi_walk_namespace
++NV_CONFTEST_FUNCTION_COMPILE_TESTS += acpi_device_has_children_and_node
+ NV_CONFTEST_FUNCTION_COMPILE_TESTS += pci_domain_nr
+ NV_CONFTEST_FUNCTION_COMPILE_TESTS += pci_dma_mapping_error
+ NV_CONFTEST_FUNCTION_COMPILE_TESTS += sg_alloc_table
+--- a/nvidia/nv-acpi.c	2019-12-17 13:33:51.000000000 +0000
++++ b/nvidia/nv-acpi.c	2026-07-20 11:32:11.731430515 +0000
+@@ -60,6 +60,7 @@
+ static acpi_handle wmmx_handle = NULL;
+ static acpi_handle mxmi_handle = NULL;
+ static acpi_handle mxms_handle = NULL;
++static nv_acpi_t *nvif_notify_object = NULL;
+ 
+ static const struct acpi_driver nv_acpi_driver_template = {
+     .name = "NVIDIA ACPI Video Driver",
+@@ -177,6 +178,81 @@
+     return 0;
+ }
+ 
++struct nv_acpi_child_walk_data
++{
++    nv_acpi_t *object;
++    int count;
++    acpi_handle lcd_dev_handle;
++};
++
++static acpi_status nv_acpi_add_one_child_handle(
++    acpi_handle handle,
++    u32 nest_level,
++    void *context,
++    void **return_value
++)
++{
++    struct nv_acpi_child_walk_data *child_data = context;
++    nv_acpi_integer_t device_id = 0;
++    acpi_status status;
++
++    status = acpi_evaluate_integer(handle, "_ADR", NULL, &device_id);
++    if (ACPI_FAILURE(status))
++        return AE_OK;
++
++    device_id = (device_id & 0xffff);
++
++    if (child_data->count == NV_MAXNUM_DISPLAY_DEVICES)
++    {
++        nv_printf(NV_DBG_ERRORS,
++                  "NVRM: nv_acpi_add: Total number of devices cannot exceed %d\n",
++                  NV_MAXNUM_DISPLAY_DEVICES);
++        return AE_CTRL_TERMINATE;
++    }
++
++    if ((device_id != 0x100) &&
++        (device_id != 0x200) &&
++        (device_id != 0x0110) && (device_id != 0x0118) && (device_id != 0x0400) &&
++        (device_id != 0x0111) && (device_id != 0x0120) && (device_id != 0x0300))
++    {
++        child_data->object->default_display_mask = 1;
++        return AE_CTRL_TERMINATE;
++    }
++
++    child_data->object->pNvVideo[child_data->count].dev_id = device_id;
++    child_data->object->pNvVideo[child_data->count].dev_handle = handle;
++    child_data->count++;
++
++    return AE_OK;
++}
++
++static acpi_status nv_acpi_find_lcd_child_handle(
++    acpi_handle handle,
++    u32 nest_level,
++    void *context,
++    void **return_value
++)
++{
++    struct nv_acpi_child_walk_data *child_data = context;
++    nv_acpi_integer_t device_id = 0;
++    acpi_status status;
++
++    status = acpi_evaluate_integer(handle, "_ADR", NULL, &device_id);
++    if (ACPI_FAILURE(status))
++        return AE_OK;
++
++    device_id = (device_id & 0xffff);
++
++    if ((device_id == 0x0110) || (device_id == 0x0118) || (device_id == 0x0400))
++    {
++        child_data->lcd_dev_handle = handle;
++        nv_printf(NV_DBG_INFO, "NVRM: %s Found LCD: %x\n", __FUNCTION__, device_id);
++        return AE_CTRL_TERMINATE;
++    }
++
++    return AE_OK;
++}
++
+ static int nv_acpi_add(struct acpi_device *device)
+ {
+     /*
+@@ -189,9 +265,13 @@
+     union acpi_object control_argument_0 = { ACPI_TYPE_INTEGER };
+     struct acpi_object_list control_argument_list = { 0, NULL };
+     nvidia_stack_t *sp = NULL;
++#if defined(NV_ACPI_DEVICE_HAS_CHILDREN_AND_NODE)
+     struct list_head *node, *next;
+     nv_acpi_integer_t device_id = 0;
+     int device_counter = 0;
++#else
++    struct nv_acpi_child_walk_data child_data;
++#endif
+ 
+     status = nv_kmem_cache_alloc_stack(&sp);
+     if (status != 0)
+@@ -218,6 +298,7 @@
+ 
+     // grab handles to all the important nodes representing devices
+ 
++#if defined(NV_ACPI_DEVICE_HAS_CHILDREN_AND_NODE)
+     list_for_each_safe(node, next, &device->children) 
+     {
+         struct acpi_device *dev =
+@@ -259,6 +340,13 @@
+         device_counter++;
+ 
+     }
++#else
++    child_data.object = pNvAcpiObject;
++    child_data.count = 0;
++    child_data.lcd_dev_handle = NULL;
++    NV_ACPI_WALK_NAMESPACE(ACPI_TYPE_DEVICE, device->handle, 1,
++                           nv_acpi_add_one_child_handle, &child_data, NULL);
++#endif
+ 
+     // arg 0, bits 1:0, 0 = enable events
+     control_argument_0.integer.type = ACPI_TYPE_INTEGER;
+@@ -542,6 +630,66 @@
+ }
+ 
+ 
++static NV_STATUS nv_install_notifier_handle(acpi_handle handle, acpi_notify_handler handler)
++{
++    nvidia_stack_t *sp = NULL;
++    nv_acpi_t *pNvAcpiObject = NULL;
++    NV_STATUS rmStatus;
++    acpi_status status;
++
++    if (!handle || nvif_notify_object)
++        return NV_ERR_GENERIC;
++
++    if (nv_kmem_cache_alloc_stack(&sp) != 0)
++        return NV_ERR_NO_MEMORY;
++
++    rmStatus = os_alloc_mem((void **) &pNvAcpiObject, sizeof(nv_acpi_t));
++    if (rmStatus != NV_OK)
++        goto return_error;
++
++    os_mem_set((void *)pNvAcpiObject, 0, sizeof(nv_acpi_t));
++    pNvAcpiObject->sp = sp;
++
++    status = acpi_install_notify_handler(handle, ACPI_DEVICE_NOTIFY,
++              handler, pNvAcpiObject);
++    if (!ACPI_FAILURE(status))
++    {
++        pNvAcpiObject->notify_handler_installed = 1;
++        nvif_notify_object = pNvAcpiObject;
++        return NV_OK;
++    }
++
++return_error:
++    nv_kmem_cache_free_stack(sp);
++    if (pNvAcpiObject)
++        os_free_mem((void *)pNvAcpiObject);
++    return NV_ERR_GENERIC;
++}
++
++static void nv_uninstall_notifier_handle(acpi_handle handle, acpi_notify_handler handler)
++{
++    acpi_status status;
++    nv_acpi_t *pNvAcpiObject = nvif_notify_object;
++
++    if (!handle || !pNvAcpiObject)
++        return;
++
++    if (pNvAcpiObject->notify_handler_installed)
++    {
++        status = acpi_remove_notify_handler(handle, ACPI_DEVICE_NOTIFY, handler);
++        if (ACPI_FAILURE(status))
++        {
++            nv_printf(NV_DBG_INFO,
++                "NVRM: nv_acpi_methods_uninit: failed to remove event notification handler (%d)!\n", status);
++            return;
++        }
++    }
++
++    nv_kmem_cache_free_stack(pNvAcpiObject->sp);
++    os_free_mem((void *)pNvAcpiObject);
++    nvif_notify_object = NULL;
++}
++
+ /*
+  * acpi methods init function.
+  * check if the NVIF, _DSM and WMMX methods are present in the acpi namespace.
+@@ -550,11 +698,7 @@
+ 
+ void NV_API_CALL nv_acpi_methods_init(NvU32 *handlesPresent)
+ {
+-    struct acpi_device *device = NULL;
+     NV_STATUS rmStatus;
+-    int retVal = -1;
+-
+-
+     if (!handlesPresent) // Caller passed us invalid pointer.
+         return;
+ 
+@@ -572,19 +716,13 @@
+             if (!nvif_parent_gpu_handle) /* unknown error */
+                 break;
+             
+-            retVal = acpi_bus_get_device(nvif_parent_gpu_handle, &device);
+-
+-            if (ACPI_FAILURE(retVal) || !device)
+-                break;
+-
+-            if (device->driver_data)
++            if (nvif_notify_object)
+             {
+                 nvif_parent_gpu_handle = NULL;
+-                break;  /* Someone else has already populated this device 
+-                           nodes' structures. So nothing more to be done */
++                break;
+             }
+ 
+-            rmStatus = nv_install_notifier(device, nv_acpi_event);
++            rmStatus = nv_install_notifier_handle(nvif_parent_gpu_handle, nv_acpi_event);
+             if (rmStatus != NV_OK)
+                 nvif_parent_gpu_handle = NULL;
+ 
+@@ -636,8 +774,6 @@
+ 
+ void NV_API_CALL nv_acpi_methods_uninit(void)
+ {
+-    struct acpi_device *device = NULL;
+-
+     nvif_handle = NULL;
+     wmmx_handle = NULL;
+     mxmi_handle = NULL;
+@@ -646,9 +782,7 @@
+     if (nvif_parent_gpu_handle == NULL) 
+         return;
+ 
+-    acpi_bus_get_device(nvif_parent_gpu_handle, &device);
+-
+-    nv_uninstall_notifier(device, nv_acpi_event);
++    nv_uninstall_notifier_handle(nvif_parent_gpu_handle, nv_acpi_event);
+     nvif_parent_gpu_handle = NULL;
+ 
+     return;
+@@ -1189,13 +1323,17 @@
+ )
+ {
+     acpi_status status;
+-    struct acpi_device *device = NULL;
+     struct acpi_buffer output = { ACPI_ALLOCATE_BUFFER, NULL };
+     union acpi_object *ddc;
+     union acpi_object ddc_arg0 = { ACPI_TYPE_INTEGER };
+     struct acpi_object_list input = { 1, &ddc_arg0 };
++#if defined(NV_ACPI_DEVICE_HAS_CHILDREN_AND_NODE)
++    struct acpi_device *device = NULL;
+     struct list_head *node, *next;
+     nv_acpi_integer_t device_id = 0;
++#else
++    struct nv_acpi_child_walk_data child_data;
++#endif
+     NvU32 i;
+     acpi_handle dev_handle  = NULL;
+     acpi_handle lcd_dev_handle  = NULL;
+@@ -1206,10 +1344,12 @@
+     if (!dev_handle)
+         return NV_ERR_INVALID_ARGUMENT;
+ 
++#if defined(NV_ACPI_DEVICE_HAS_CHILDREN_AND_NODE)
+     status = acpi_bus_get_device(dev_handle, &device);
+ 
+     if (ACPI_FAILURE(status) || !device)
+         return NV_ERR_INVALID_ARGUMENT;
++#endif
+ 
+     if (!NV_MAY_SLEEP())
+     {
+@@ -1221,6 +1361,7 @@
+         return NV_ERR_NOT_SUPPORTED;
+     }
+ 
++#if defined(NV_ACPI_DEVICE_HAS_CHILDREN_AND_NODE)
+     list_for_each_safe(node, next, &device->children) 
+     {
+         struct acpi_device *dev =
+@@ -1244,6 +1385,14 @@
+         }
+ 
+     }
++#else
++    child_data.object = NULL;
++    child_data.count = 0;
++    child_data.lcd_dev_handle = NULL;
++    NV_ACPI_WALK_NAMESPACE(ACPI_TYPE_DEVICE, dev_handle, 1,
++                           nv_acpi_find_lcd_child_handle, &child_data, NULL);
++    lcd_dev_handle = child_data.lcd_dev_handle;
++#endif
+ 
+     if (lcd_dev_handle == NULL)
+     {

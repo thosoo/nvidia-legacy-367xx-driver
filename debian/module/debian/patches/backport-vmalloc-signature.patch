@@ -1,0 +1,53 @@
+Description: backport nv_vmalloc __vmalloc signature detection from 450.57
+ Linux 5.8 removed the pgprot_t argument from __vmalloc().  Probe the
+ callable prototype instead of selecting by kernel version.
+Origin: backport, NVIDIA 450.57 nv_vmalloc compatibility pattern
+Forwarded: not-needed
+Last-Update: 2026-07-20
+
+--- a/conftest.sh	2026-07-20 07:23:44.284460039 +0000
++++ b/conftest.sh	2026-07-20 07:24:40.340359278 +0000
+@@ -2944,6 +2944,19 @@
+             compile_check_conftest "$CODE" "NV_TIMER_SETUP_PRESENT" "" "functions"
+         ;;
+ 
++        vmalloc_has_pgprot_t_arg)
++            CODE="
++            #include <linux/vmalloc.h>
++            #include <linux/gfp.h>
++            #include <asm/pgtable.h>
++
++            void conftest_vmalloc_has_pgprot_t_arg(void) {
++                (void)__vmalloc(4096, GFP_KERNEL, PAGE_KERNEL);
++            }"
++
++            compile_check_conftest "$CODE" "NV_VMALLOC_HAS_PGPROT_T_ARG" "" "types"
++        ;;
++
+         # When adding a new conftest entry, please use the correct format for
+         # specifying the relevant upstream Linux kernel commit.
+         #
+--- a/nvidia/nvidia.Kbuild	2026-07-20 07:23:44.268460056 +0000
++++ b/nvidia/nvidia.Kbuild	2026-07-20 07:24:40.340359278 +0000
+@@ -164,6 +164,7 @@
+ NV_CONFTEST_TYPE_COMPILE_TESTS += kuid_t
+ NV_CONFTEST_TYPE_COMPILE_TESTS += dma_ops
+ NV_CONFTEST_TYPE_COMPILE_TESTS += dma_map_ops
++NV_CONFTEST_TYPE_COMPILE_TESTS += vmalloc_has_pgprot_t_arg
+ NV_CONFTEST_TYPE_COMPILE_TESTS += noncoherent_swiotlb_dma_ops
+ NV_CONFTEST_TYPE_COMPILE_TESTS += vm_fault_present
+ 
+--- a/common/inc/nv-linux.h	2026-07-20 07:23:44.300460022 +0000
++++ b/common/inc/nv-linux.h	2026-07-20 07:24:40.344359269 +0000
+@@ -666,7 +666,11 @@
+ 
+ static inline void *nv_vmalloc(unsigned long size)
+ {
++#if defined(NV_VMALLOC_HAS_PGPROT_T_ARG)
+     void *ptr = __vmalloc(size, GFP_KERNEL, PAGE_KERNEL);
++#else
++    void *ptr = __vmalloc(size, GFP_KERNEL);
++#endif
+     VM_ALLOC_RECORD(ptr, size, "vm_vmalloc");
+     return ptr;
+ }

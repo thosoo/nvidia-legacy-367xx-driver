@@ -1,0 +1,318 @@
+Description: Backport procfs private-data and proc_ops compatibility
+ Modern kernels removed the old PDE(inode)->data fallback and switched
+ proc_create_data() to receive struct proc_ops instead of struct
+ file_operations. Add explicit conftests for lowercase pde_data(),
+ uppercase PDE_DATA(), the direct legacy proc_dir_entry member fallback,
+ and proc_ops support, then centralize operation-table field selection in
+ nv-procfs.h.
+Origin: backport, NVIDIA legacy procfs compatibility design adapted for 367.134
+Forwarded: not-needed
+--- a/common/inc/nv-procfs.h	2019-12-17 13:33:51.000000000 +0000
++++ b/common/inc/nv-procfs.h	2026-07-20 16:55:06.253411648 +0000
+@@ -22,6 +22,34 @@
+ #define NV_SET_PROC_ENTRY_OWNER(entry)
+ #endif
+ 
++#if defined(NV_PROC_OPS_PRESENT)
++typedef struct proc_ops nv_proc_ops_t;
++# define NV_PROC_OPS_OWNER
++# define NV_PROC_OPS_OPEN       .proc_open
++# define NV_PROC_OPS_READ       .proc_read
++# define NV_PROC_OPS_WRITE      .proc_write
++# define NV_PROC_OPS_LSEEK      .proc_lseek
++# define NV_PROC_OPS_RELEASE    .proc_release
++# define NV_PROC_OPS_POLL       .proc_poll
++# define NV_PROC_OPS_IOCTL      .proc_ioctl
++# define NV_PROC_OPS_COMPAT     .proc_compat_ioctl
++# define NV_PROC_OPS_MMAP       .proc_mmap
++# define NV_PROC_OPS_GET_WRITE(fops) ((fops)->proc_write)
++#else
++typedef struct file_operations nv_proc_ops_t;
++# define NV_PROC_OPS_OWNER      .owner = THIS_MODULE,
++# define NV_PROC_OPS_OPEN       .open
++# define NV_PROC_OPS_READ       .read
++# define NV_PROC_OPS_WRITE      .write
++# define NV_PROC_OPS_LSEEK      .llseek
++# define NV_PROC_OPS_RELEASE    .release
++# define NV_PROC_OPS_POLL       .poll
++# define NV_PROC_OPS_IOCTL      .unlocked_ioctl
++# define NV_PROC_OPS_COMPAT     .compat_ioctl
++# define NV_PROC_OPS_MMAP       .mmap
++# define NV_PROC_OPS_GET_WRITE(fops) ((fops)->write)
++#endif
++
+ #if defined(NV_PROC_CREATE_DATA_PRESENT)
+ # define NV_CREATE_PROC_ENTRY(name,mode,parent,fops,__data) \
+     proc_create_data(name, mode, parent, fops, __data)
+@@ -44,8 +72,8 @@
+    ({                                                                    \
+         struct proc_dir_entry *__entry;                                  \
+         int mode = (S_IFREG | S_IRUGO);                                  \
+-        const struct file_operations *fops = &nv_procfs_##__name##_fops; \
+-        if (fops->write != 0)                                            \
++        const nv_proc_ops_t *fops = &nv_procfs_##__name##_fops;           \
++        if (NV_PROC_OPS_GET_WRITE(fops) != 0)                              \
+             mode |= S_IWUSR;                                             \
+         __entry = NV_CREATE_PROC_ENTRY(filename, mode, parent, fops,     \
+             __data);                                                     \
+@@ -78,10 +106,14 @@
+         __entry;                                               \
+     })
+ 
+-#if defined(NV_PDE_DATA_PRESENT)
++#if defined(NV_PDE_DATA_LOWER_CASE_PRESENT)
++# define NV_PDE_DATA(inode) pde_data(inode)
++#elif defined(NV_PDE_DATA_UPPER_CASE_PRESENT)
+ # define NV_PDE_DATA(inode) PDE_DATA(inode)
+-#else
++#elif defined(NV_PDE_STRUCT_ACCESS_PRESENT)
+ # define NV_PDE_DATA(inode) PDE(inode)->data
++#else
++# error "No supported procfs private-data accessor"
+ #endif
+ 
+ #if defined(NV_PROC_REMOVE_PRESENT)
+@@ -102,12 +134,12 @@
+             NV_PDE_DATA(inode));                                              \
+     }                                                                         \
+                                                                               \
+-    static const struct file_operations nv_procfs_##__name##_fops = {         \
+-        .owner      = THIS_MODULE,                                            \
+-        .open       = nv_procfs_open_##__name,                                \
+-        .read       = seq_read,                                               \
+-        .llseek     = seq_lseek,                                              \
+-        .release    = single_release,                                         \
++    static const nv_proc_ops_t nv_procfs_##__name##_fops = {                  \
++        NV_PROC_OPS_OWNER                                                     \
++        NV_PROC_OPS_OPEN       = nv_procfs_open_##__name,                     \
++        NV_PROC_OPS_READ       = seq_read,                                    \
++        NV_PROC_OPS_LSEEK      = seq_lseek,                                   \
++        NV_PROC_OPS_RELEASE    = single_release,                              \
+     };
+ 
+ #endif  /* CONFIG_PROC_FS */
+--- a/conftest.sh	2026-07-20 16:55:06.013410460 +0000
++++ b/conftest.sh	2026-07-20 16:55:07.629418454 +0000
+@@ -258,6 +258,60 @@
+     fi
+ }
+ 
++
++procfs_compile_check_conftest() {
++    CODE="$1"
++    DEF="$2"
++    VAL="$3"
++    CAT="$4"
++    NAME=$(printf '%s' "$DEF" | tr 'A-Z' 'a-z')
++    DIAGDIR=conftest-procfs-diagnostics
++    SRC=conftest$$.c
++    OBJ=conftest$$.o
++    mkdir -p "$DIAGDIR"
++    echo "$CONFTEST_PREAMBLE
++    $CODE" > "$SRC"
++    printf '%s\n' "$CC" > "$DIAGDIR/$NAME.compiler"
++    pwd > "$DIAGDIR/$NAME.cwd"
++    cp "$SRC" "$DIAGDIR/$NAME.source.c"
++    printf '%s\n' "$CC $CFLAGS -Werror=implicit-function-declaration -Werror=incompatible-pointer-types -c $SRC" > "$DIAGDIR/$NAME.command.txt"
++    set +e
++    $CC $CFLAGS -Werror=implicit-function-declaration -Werror=incompatible-pointer-types -c "$SRC" > "$DIAGDIR/$NAME.stdout" 2> "$DIAGDIR/$NAME.stderr"
++    STATUS=$?
++    set -e
++    printf '%s\n' "$STATUS" > "$DIAGDIR/$NAME.exit"
++    if [ -f "$OBJ" ]; then
++        echo yes > "$DIAGDIR/$NAME.object-created"
++        rm -f "$OBJ"
++        echo "#define ${DEF} ${VAL}" | append_conftest "${CAT}"
++        echo "#define ${DEF} ${VAL}" > "$DIAGDIR/$NAME.definition"
++        case "$DEF" in
++            NV_PROC_OPS_PRESENT)
++                echo "struct proc_ops" > "$DIAGDIR/selected-operation-table-type"
++            ;;
++            NV_PDE_DATA_LOWER_CASE_PRESENT)
++                echo "pde_data(inode)" > "$DIAGDIR/selected-private-data-accessor"
++            ;;
++            NV_PDE_DATA_UPPER_CASE_PRESENT)
++                test -f "$DIAGDIR/selected-private-data-accessor" || \
++                    echo "PDE_DATA(inode)" > "$DIAGDIR/selected-private-data-accessor"
++            ;;
++            NV_PDE_STRUCT_ACCESS_PRESENT)
++                test -f "$DIAGDIR/selected-private-data-accessor" || \
++                    echo "PDE(inode)->data" > "$DIAGDIR/selected-private-data-accessor"
++            ;;
++        esac
++    else
++        echo no > "$DIAGDIR/$NAME.object-created"
++        echo "#undef ${DEF}" | append_conftest "${CAT}"
++        echo "#undef ${DEF}" > "$DIAGDIR/$NAME.definition"
++        if [ "$DEF" = "NV_PROC_OPS_PRESENT" ]; then
++            echo "struct file_operations" > "$DIAGDIR/selected-operation-table-type"
++        fi
++    fi
++    rm -f "$SRC"
++}
++
+ export_symbol_present_conftest() {
+     #
+     # Check Module.symvers to see whether the given symbol is present.
+@@ -1622,17 +1676,71 @@
+         ;;
+ 
+ 
+-        pde_data)
++        proc_ops)
++            #
++            # Determine if struct proc_ops exists and if proc_create_data()
++            # accepts a const struct proc_ops * operation table.
++            #
++            CODE="
++            #include <linux/proc_fs.h>
++            static int conftest_open(struct inode *inode, struct file *file)
++            {
++                return 0;
++            }
++            static const struct proc_ops conftest_proc_ops = {
++                .proc_open = conftest_open,
++            };
++            struct proc_dir_entry *conftest_proc_create(
++                struct proc_dir_entry *parent,
++                void *data)
++            {
++                return proc_create_data(\"nvidia-conftest\", 0, parent,
++                    &conftest_proc_ops, data);
++            }"
++
++            procfs_compile_check_conftest "$CODE" "NV_PROC_OPS_PRESENT" "" "types"
++        ;;
++
++        pde_data_lower_case)
++            #
++            # Determine if pde_data() is available for procfs private data.
++            #
++            CODE="
++            #include <linux/proc_fs.h>
++            void *conftest_pde_data_lower_case(const struct inode *inode)
++            {
++                return pde_data(inode);
++            }"
++
++            procfs_compile_check_conftest "$CODE" "NV_PDE_DATA_LOWER_CASE_PRESENT" "" "functions"
++        ;;
++
++        pde_data_upper_case)
++            #
++            # Determine if PDE_DATA() is available for procfs private data.
++            #
++            CODE="
++            #include <linux/proc_fs.h>
++            void *conftest_pde_data_upper_case(const struct inode *inode)
++            {
++                return PDE_DATA(inode);
++            }"
++
++            procfs_compile_check_conftest "$CODE" "NV_PDE_DATA_UPPER_CASE_PRESENT" "" "functions"
++        ;;
++
++        pde_struct_access)
+             #
+-            # Determine if the PDE_DATA() function is present.
++            # Determine if the legacy PDE(inode)->data fallback is available.
+             #
+             CODE="
+             #include <linux/proc_fs.h>
+-            void conftest_PDE_DATA(void) {
+-                PDE_DATA();
++            void *conftest_pde_struct_access(const struct inode *inode)
++            {
++                return PDE(inode)->data;
+             }"
+ 
+-            compile_check_conftest "$CODE" "NV_PDE_DATA_PRESENT" "" "functions"
++            procfs_compile_check_conftest "$CODE" "NV_PDE_STRUCT_ACCESS_PRESENT" "" "types"
+         ;;
+ 
+         get_num_physpages)
+--- a/nvidia/nvidia.Kbuild	2026-07-20 16:55:06.013410460 +0000
++++ b/nvidia/nvidia.Kbuild	2026-07-20 16:55:06.253411648 +0000
+@@ -130,7 +130,10 @@
+ NV_CONFTEST_FUNCTION_COMPILE_TESTS += efi_enabled
+ NV_CONFTEST_FUNCTION_COMPILE_TESTS += is_swiotlb_active
+ NV_CONFTEST_FUNCTION_COMPILE_TESTS += proc_create_data
+-NV_CONFTEST_FUNCTION_COMPILE_TESTS += pde_data
++NV_CONFTEST_FUNCTION_COMPILE_TESTS += proc_ops
++NV_CONFTEST_FUNCTION_COMPILE_TESTS += pde_data_lower_case
++NV_CONFTEST_FUNCTION_COMPILE_TESTS += pde_data_upper_case
++NV_CONFTEST_FUNCTION_COMPILE_TESTS += pde_struct_access
+ NV_CONFTEST_FUNCTION_COMPILE_TESTS += proc_remove
+ NV_CONFTEST_FUNCTION_COMPILE_TESTS += pm_vt_switch_required
+ NV_CONFTEST_FUNCTION_COMPILE_TESTS += drm_driver_has_set_busid
+--- a/nvidia-modeset/nvidia-modeset.Kbuild	2019-12-17 13:36:11.000000000 +0000
++++ b/nvidia-modeset/nvidia-modeset.Kbuild	2026-07-20 16:55:06.253411648 +0000
+@@ -82,6 +82,9 @@
+ NV_CONFTEST_TYPE_COMPILE_TESTS += file_inode
+ NV_CONFTEST_TYPE_COMPILE_TESTS += proc_dir_entry
+ NV_CONFTEST_FUNCTION_COMPILE_TESTS += proc_create_data
+-NV_CONFTEST_FUNCTION_COMPILE_TESTS += pde_data
++NV_CONFTEST_FUNCTION_COMPILE_TESTS += proc_ops
++NV_CONFTEST_FUNCTION_COMPILE_TESTS += pde_data_lower_case
++NV_CONFTEST_FUNCTION_COMPILE_TESTS += pde_data_upper_case
++NV_CONFTEST_FUNCTION_COMPILE_TESTS += pde_struct_access
+ NV_CONFTEST_FUNCTION_COMPILE_TESTS += proc_remove
+ NV_CONFTEST_FUNCTION_COMPILE_TESTS += timer_setup
+--- a/nvidia-uvm/nvidia-uvm.Kbuild	2026-07-20 16:55:05.765409234 +0000
++++ b/nvidia-uvm/nvidia-uvm.Kbuild	2026-07-20 16:55:06.253411648 +0000
+@@ -111,7 +111,10 @@
+ NV_CONFTEST_FUNCTION_COMPILE_TESTS += vzalloc
+ NV_CONFTEST_FUNCTION_COMPILE_TESTS += wait_on_bit_lock_argument_count
+ NV_CONFTEST_FUNCTION_COMPILE_TESTS += proc_create_data
+-NV_CONFTEST_FUNCTION_COMPILE_TESTS += pde_data
++NV_CONFTEST_FUNCTION_COMPILE_TESTS += proc_ops
++NV_CONFTEST_FUNCTION_COMPILE_TESTS += pde_data_lower_case
++NV_CONFTEST_FUNCTION_COMPILE_TESTS += pde_data_upper_case
++NV_CONFTEST_FUNCTION_COMPILE_TESTS += pde_struct_access
+ NV_CONFTEST_FUNCTION_COMPILE_TESTS += proc_remove
+ NV_CONFTEST_FUNCTION_COMPILE_TESTS += bitmap_clear
+ NV_CONFTEST_FUNCTION_COMPILE_TESTS += usleep_range
+--- a/nvidia/nv-procfs.c	2019-12-17 13:33:51.000000000 +0000
++++ b/nvidia/nv-procfs.c	2026-07-20 16:55:06.253411648 +0000
+@@ -411,13 +411,13 @@
+     return ((status < 0) ? status : (int)count);
+ }
+ 
+-static struct file_operations nv_procfs_registry_fops = {
+-    .owner   = THIS_MODULE,
+-    .open    = nv_procfs_open_registry,
+-    .read    = seq_read,
+-    .write   = nv_procfs_write_file,
+-    .llseek  = seq_lseek,
+-    .release = nv_procfs_close_registry,
++static nv_proc_ops_t nv_procfs_registry_fops = {
++    NV_PROC_OPS_OWNER
++    NV_PROC_OPS_OPEN    = nv_procfs_open_registry,
++    NV_PROC_OPS_READ    = seq_read,
++    NV_PROC_OPS_WRITE   = nv_procfs_write_file,
++    NV_PROC_OPS_LSEEK   = seq_lseek,
++    NV_PROC_OPS_RELEASE = nv_procfs_close_registry,
+ };
+ 
+ static int
+@@ -546,13 +546,13 @@
+     return rc;
+ }
+ 
+-static struct file_operations nv_procfs_unbind_lock_fops = {
+-    .owner   = THIS_MODULE,
+-    .open    = nv_procfs_open_unbind_lock,
+-    .read    = seq_read,
+-    .write   = nv_procfs_write_file,
+-    .llseek  = seq_lseek,
+-    .release = nv_procfs_close_unbind_lock,
++static nv_proc_ops_t nv_procfs_unbind_lock_fops = {
++    NV_PROC_OPS_OWNER
++    NV_PROC_OPS_OPEN    = nv_procfs_open_unbind_lock,
++    NV_PROC_OPS_READ    = seq_read,
++    NV_PROC_OPS_WRITE   = nv_procfs_write_file,
++    NV_PROC_OPS_LSEEK   = seq_lseek,
++    NV_PROC_OPS_RELEASE = nv_procfs_close_unbind_lock,
+ };
+ 
+ static int

@@ -7,15 +7,16 @@ Rebased for NVIDIA 367.134.  The inherited batch also changed
 nvidia/nv-gpu-numa.c, which is absent from 367.134; the dir_context.actor
 return-type adaptation therefore cannot be applied to this branch without a
 real target.  Retained hunks only affect files present in 367.134 and keep the
-same warning-cleanup semantics.
+same warning-cleanup semantics.  The former nv-acpi.c unused-device hunk is
+superseded by backport-acpi-api-compat.patch, which replaced the device-based
+methods-uninit notifier path with handle-based notifier removal.
 ---
  nvidia-modeset/nvidia-modeset-linux.c | 1 +
- nvidia/nv-acpi.c                      | 2 ++
- nvidia/nv-frontend.c                  | 3 ---
+  nvidia/nv-frontend.c                  | 3 ---
  nvidia/nv-frontend.h                  | 3 +++
  nvidia/nv-instance.c                  | 1 +
  nvidia/nv-mmap.c                      | 1 +
- 6 files changed, 8 insertions(+), 3 deletions(-)
+ 5 files changed, 6 insertions(+), 3 deletions(-)
 
 diff --git a/nvidia-modeset/nvidia-modeset-linux.c b/nvidia-modeset/nvidia-modeset-linux.c
 --- a/nvidia-modeset/nvidia-modeset-linux.c
@@ -28,19 +29,6 @@ diff --git a/nvidia-modeset/nvidia-modeset-linux.c b/nvidia-modeset/nvidia-modes
  void NVKMS_API_CALL nvkms_close_common(struct nvkms_per_open *popen)
  {
      /*
-diff --git a/nvidia/nv-acpi.c b/nvidia/nv-acpi.c
---- a/nvidia/nv-acpi.c
-+++ b/nvidia/nv-acpi.c
-@@ -638,7 +638,9 @@ acpi_status nv_acpi_find_methods(
- 
- void NV_API_CALL nv_acpi_methods_uninit(void)
- {
-+#if defined(NV_ACPI_BUS_GET_DEVICE_PRESENT)
-     struct acpi_device *device = NULL;
-+#endif
- 
-     nvif_handle = NULL;
-     wmmx_handle = NULL;
 diff --git a/nvidia/nv-frontend.c b/nvidia/nv-frontend.c
 --- a/nvidia/nv-frontend.c
 +++ b/nvidia/nv-frontend.c

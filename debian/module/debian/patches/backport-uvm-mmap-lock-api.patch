@@ -1,0 +1,279 @@
+--- a/conftest.sh
++++ b/conftest.sh
+@@ -1885,0 +1886,20 @@ compile_test() {
++        mmap_assert_locked)
++            CODE="
++            #include <linux/mm.h>
++            void conftest_mmap_assert_locked(struct mm_struct *mm)
++            {
++                mmap_assert_locked(mm);
++            }"
++            compile_check_conftest "$CODE" "NV_MMAP_ASSERT_LOCKED_PRESENT" "" "types"
++        ;;
++
++        mmap_assert_write_locked)
++            CODE="
++            #include <linux/mm.h>
++            void conftest_mmap_assert_write_locked(struct mm_struct *mm)
++            {
++                mmap_assert_write_locked(mm);
++            }"
++            compile_check_conftest "$CODE" "NV_MMAP_ASSERT_WRITE_LOCKED_PRESENT" "" "types"
++        ;;
++
+--- a/nvidia-uvm/nvidia-uvm.Kbuild
++++ b/nvidia-uvm/nvidia-uvm.Kbuild
+@@ -124,0 +125,2 @@ NV_CONFTEST_FUNCTION_COMPILE_TESTS += mm
++NV_CONFTEST_FUNCTION_COMPILE_TESTS += mmap_assert_locked
++NV_CONFTEST_FUNCTION_COMPILE_TESTS += mmap_assert_write_locked
+--- a/nvidia-uvm/uvm8.c
++++ b/nvidia-uvm/uvm8.c
+@@ -235 +235 @@ static void uvm_vm_open_managed(struct v
+-    uvm_record_lock_mmap_sem_write(&current->mm->mmap_sem);
++    uvm_record_lock_mmap_sem_write(current->mm);
+@@ -284 +284 @@ out:
+-    uvm_record_unlock_mmap_sem_write(&current->mm->mmap_sem);
++    uvm_record_unlock_mmap_sem_write(current->mm);
+@@ -294 +294 @@ static void uvm_vm_close_managed(struct
+-        uvm_record_lock_mmap_sem_write(&current->mm->mmap_sem);
++        uvm_record_lock_mmap_sem_write(current->mm);
+@@ -324 +324 @@ static void uvm_vm_close_managed(struct
+-        uvm_record_unlock_mmap_sem_write(&current->mm->mmap_sem);
++        uvm_record_unlock_mmap_sem_write(current->mm);
+@@ -343 +343 @@ static int uvm_vm_fault(struct vm_area_s
+-    uvm_record_lock_mmap_sem_read(&vma->vm_mm->mmap_sem);
++    uvm_record_lock_mmap_sem_read(vma->vm_mm);
+@@ -395 +395 @@ out:
+-    uvm_record_unlock_mmap_sem_read(&vma->vm_mm->mmap_sem);
++    uvm_record_unlock_mmap_sem_read(vma->vm_mm);
+@@ -459 +459 @@ static void uvm_vm_open_semaphore_pool(s
+-    uvm_record_lock_mmap_sem_write(&current->mm->mmap_sem);
++    uvm_record_lock_mmap_sem_write(current->mm);
+@@ -497 +497 @@ static void uvm_vm_open_semaphore_pool(s
+-    uvm_record_unlock_mmap_sem_write(&current->mm->mmap_sem);
++    uvm_record_unlock_mmap_sem_write(current->mm);
+@@ -507 +507 @@ static void uvm_vm_close_semaphore_pool(
+-        uvm_record_lock_mmap_sem_write(&current->mm->mmap_sem);
++        uvm_record_lock_mmap_sem_write(current->mm);
+@@ -516 +516 @@ static void uvm_vm_close_semaphore_pool(
+-        uvm_record_unlock_mmap_sem_write(&current->mm->mmap_sem);
++        uvm_record_unlock_mmap_sem_write(current->mm);
+@@ -542 +542 @@ static int uvm_mmap(struct file *filp, s
+-    uvm_record_lock_mmap_sem_write(&current->mm->mmap_sem);
++    uvm_record_lock_mmap_sem_write(current->mm);
+@@ -628 +628 @@ out:
+-    uvm_record_unlock_mmap_sem_write(&current->mm->mmap_sem);
++    uvm_record_unlock_mmap_sem_write(current->mm);
+--- a/nvidia-uvm/uvm8_lock.h
++++ b/nvidia-uvm/uvm8_lock.h
+@@ -322,3 +322,4 @@ bool __uvm_thread_check_all_unlocked(voi
+-  // Helpers for recording and asserting mmap_sem state
+-  #define uvm_record_lock_mmap_sem_read(mmap_sem) \
+-          uvm_record_lock_raw((mmap_sem), UVM_LOCK_ORDER_MMAP_SEM, UVM_LOCK_MODE_SHARED)
++  // Helpers for recording and asserting mmap state. Track by mm_struct rather
++  // than by the address of the kernel's internal mmap semaphore.
++  #define uvm_record_lock_mmap_sem_read(mm) \
++          uvm_record_lock_raw((mm), UVM_LOCK_ORDER_MMAP_SEM, UVM_LOCK_MODE_SHARED)
+@@ -326,2 +327,2 @@ bool __uvm_thread_check_all_unlocked(voi
+-  #define uvm_record_unlock_mmap_sem_read(mmap_sem) \
+-          uvm_record_unlock_raw((mmap_sem), UVM_LOCK_ORDER_MMAP_SEM, UVM_LOCK_MODE_SHARED, false)
++  #define uvm_record_unlock_mmap_sem_read(mm) \
++          uvm_record_unlock_raw((mm), UVM_LOCK_ORDER_MMAP_SEM, UVM_LOCK_MODE_SHARED, false)
+@@ -329,2 +330,2 @@ bool __uvm_thread_check_all_unlocked(voi
+-  #define uvm_record_unlock_mmap_sem_read_out_of_order(mmap_sem) \
+-          uvm_record_unlock_raw((mmap_sem), UVM_LOCK_ORDER_MMAP_SEM, UVM_LOCK_MODE_SHARED, true)
++  #define uvm_record_unlock_mmap_sem_read_out_of_order(mm) \
++          uvm_record_unlock_raw((mm), UVM_LOCK_ORDER_MMAP_SEM, UVM_LOCK_MODE_SHARED, true)
+@@ -332,2 +333,2 @@ bool __uvm_thread_check_all_unlocked(voi
+-  #define uvm_record_lock_mmap_sem_write(mmap_sem) \
+-          uvm_record_lock_raw((mmap_sem), UVM_LOCK_ORDER_MMAP_SEM, UVM_LOCK_MODE_EXCLUSIVE)
++  #define uvm_record_lock_mmap_sem_write(mm) \
++          uvm_record_lock_raw((mm), UVM_LOCK_ORDER_MMAP_SEM, UVM_LOCK_MODE_EXCLUSIVE)
+@@ -335,2 +336,2 @@ bool __uvm_thread_check_all_unlocked(voi
+-  #define uvm_record_unlock_mmap_sem_write(mmap_sem) \
+-          uvm_record_unlock_raw((mmap_sem), UVM_LOCK_ORDER_MMAP_SEM, UVM_LOCK_MODE_EXCLUSIVE, false)
++  #define uvm_record_unlock_mmap_sem_write(mm) \
++          uvm_record_unlock_raw((mm), UVM_LOCK_ORDER_MMAP_SEM, UVM_LOCK_MODE_EXCLUSIVE, false)
+@@ -338,2 +339,2 @@ bool __uvm_thread_check_all_unlocked(voi
+-  #define uvm_record_unlock_mmap_sem_write_out_of_order(mmap_sem) \
+-          uvm_record_unlock_raw((mmap_sem), UVM_LOCK_ORDER_MMAP_SEM, UVM_LOCK_MODE_EXCLUSIVE, true)
++  #define uvm_record_unlock_mmap_sem_write_out_of_order(mm) \
++          uvm_record_unlock_raw((mm), UVM_LOCK_ORDER_MMAP_SEM, UVM_LOCK_MODE_EXCLUSIVE, true)
+@@ -341,2 +342,2 @@ bool __uvm_thread_check_all_unlocked(voi
+-  #define uvm_check_locked_mmap_sem(mmap_sem, mode) \
+-           __uvm_check_locked((mmap_sem), UVM_LOCK_ORDER_MMAP_SEM, (mode))
++  #define uvm_check_locked_mmap_sem(mm, mode) \
++           __uvm_check_locked((mm), UVM_LOCK_ORDER_MMAP_SEM, (mode))
+@@ -394,4 +395,30 @@ bool __uvm_thread_check_all_unlocked(voi
+-// Helpers for locking mmap_sem and recording its usage
+-#define uvm_assert_mmap_sem_locked_mode(mmap_sem, mode) ({                          \
+-      typeof(mmap_sem) _sem = (mmap_sem);                                           \
+-      UVM_ASSERT(rwsem_is_locked(_sem) && uvm_check_locked_mmap_sem(_sem, (mode))); \
++static inline void uvm_mmap_assert_locked(struct mm_struct *mm)
++{
++#if defined(NV_MMAP_ASSERT_LOCKED_PRESENT)
++    mmap_assert_locked(mm);
++#elif defined(NV_MM_HAS_MMAP_SEM)
++    UVM_ASSERT(rwsem_is_locked(&mm->mmap_sem));
++#else
++#error "No supported mmap lock assertion API"
++#endif
++}
++
++static inline void uvm_mmap_assert_write_locked(struct mm_struct *mm)
++{
++#if defined(NV_MMAP_ASSERT_WRITE_LOCKED_PRESENT)
++    mmap_assert_write_locked(mm);
++#elif defined(NV_MM_HAS_MMAP_SEM)
++    UVM_ASSERT(rwsem_is_locked(&mm->mmap_sem));
++#else
++#error "No supported mmap write-lock assertion API"
++#endif
++}
++
++// Helpers for locking mmap state and recording its usage
++#define uvm_assert_mmap_sem_locked_mode(mm, mode) ({                         \
++      struct mm_struct *_mm = (mm);                                          \
++      if ((mode) == UVM_LOCK_MODE_EXCLUSIVE)                                 \
++          uvm_mmap_assert_write_locked(_mm);                                 \
++      else                                                                   \
++          uvm_mmap_assert_locked(_mm);                                       \
++      UVM_ASSERT(uvm_check_locked_mmap_sem(_mm, (mode)));                    \
+@@ -400,8 +427,8 @@ bool __uvm_thread_check_all_unlocked(voi
+-#define uvm_assert_mmap_sem_locked(mmap_sem)        uvm_assert_mmap_sem_locked_mode((mmap_sem), UVM_LOCK_MODE_ANY)
+-#define uvm_assert_mmap_sem_locked_read(mmap_sem)   uvm_assert_mmap_sem_locked_mode((mmap_sem), UVM_LOCK_MODE_SHARED)
+-#define uvm_assert_mmap_sem_locked_write(mmap_sem)  uvm_assert_mmap_sem_locked_mode((mmap_sem), UVM_LOCK_MODE_EXCLUSIVE)
+-
+-#define uvm_down_read_mmap_sem(mmap_sem) ({             \
+-        typeof(mmap_sem) _sem = (mmap_sem);             \
+-        uvm_record_lock_mmap_sem_read(_sem);            \
+-        down_read(_sem);                                \
++#define uvm_assert_mmap_sem_locked(mm)        uvm_assert_mmap_sem_locked_mode((mm), UVM_LOCK_MODE_ANY)
++#define uvm_assert_mmap_sem_locked_read(mm)   uvm_assert_mmap_sem_locked_mode((mm), UVM_LOCK_MODE_SHARED)
++#define uvm_assert_mmap_sem_locked_write(mm)  uvm_assert_mmap_sem_locked_mode((mm), UVM_LOCK_MODE_EXCLUSIVE)
++
++#define uvm_down_read_mmap_sem(mm) ({             \
++        struct mm_struct *_mm = (mm);             \
++        uvm_record_lock_mmap_sem_read(_mm);       \
++        nv_mmap_read_lock(_mm);                   \
+@@ -410,4 +437,4 @@ bool __uvm_thread_check_all_unlocked(voi
+-#define uvm_up_read_mmap_sem(mmap_sem) ({               \
+-        typeof(mmap_sem) _sem = (mmap_sem);             \
+-        up_read(_sem);                                  \
+-        uvm_record_unlock_mmap_sem_read(_sem);          \
++#define uvm_up_read_mmap_sem(mm) ({               \
++        struct mm_struct *_mm = (mm);             \
++        nv_mmap_read_unlock(_mm);                 \
++        uvm_record_unlock_mmap_sem_read(_mm);     \
+@@ -416,4 +443,4 @@ bool __uvm_thread_check_all_unlocked(voi
+-#define uvm_up_read_mmap_sem_out_of_order(mmap_sem) ({      \
+-        typeof(mmap_sem) _sem = (mmap_sem);                 \
+-        up_read(_sem);                                      \
+-        uvm_record_unlock_mmap_sem_read_out_of_order(_sem); \
++#define uvm_up_read_mmap_sem_out_of_order(mm) ({      \
++        struct mm_struct *_mm = (mm);                 \
++        nv_mmap_read_unlock(_mm);                     \
++        uvm_record_unlock_mmap_sem_read_out_of_order(_mm); \
+--- a/nvidia-uvm/uvm8_mem.c
++++ b/nvidia-uvm/uvm8_mem.c
+@@ -412 +412 @@ static NV_STATUS uvm_mem_map_cpu_sysmem_
+-    uvm_assert_mmap_sem_locked(&vma->vm_mm->mmap_sem);
++    uvm_assert_mmap_sem_locked(vma->vm_mm);
+--- a/nvidia-uvm/uvm8_migrate.c
++++ b/nvidia-uvm/uvm8_migrate.c
+@@ -285 +285 @@ static NV_STATUS uvm_migrate(uvm_va_spac
+-    uvm_assert_mmap_sem_locked(&current->mm->mmap_sem);
++    uvm_assert_mmap_sem_locked(current->mm);
+@@ -470 +470 @@ NV_STATUS uvm_api_migrate(UVM_MIGRATE_PA
+-    uvm_down_read_mmap_sem(&current->mm->mmap_sem);
++    uvm_down_read_mmap_sem(current->mm);
+@@ -531 +531 @@ done:
+-    uvm_up_read_mmap_sem_out_of_order(&current->mm->mmap_sem);
++    uvm_up_read_mmap_sem_out_of_order(current->mm);
+@@ -576 +576 @@ NV_STATUS uvm_api_migrate_range_group(UV
+-    uvm_down_read_mmap_sem(&current->mm->mmap_sem);
++    uvm_down_read_mmap_sem(current->mm);
+@@ -619 +619 @@ done:
+-    uvm_up_read_mmap_sem_out_of_order(&current->mm->mmap_sem);
++    uvm_up_read_mmap_sem_out_of_order(current->mm);
+--- a/nvidia-uvm/uvm8_policy.c
++++ b/nvidia-uvm/uvm8_policy.c
+@@ -277 +277 @@ static NV_STATUS accessed_by_set(uvm_va_
+-        uvm_down_read_mmap_sem(&current->mm->mmap_sem);
++        uvm_down_read_mmap_sem(current->mm);
+@@ -325 +325 @@ done:
+-        uvm_up_read_mmap_sem(&current->mm->mmap_sem);
++        uvm_up_read_mmap_sem(current->mm);
+@@ -520 +520 @@ static NV_STATUS read_duplication_set(uv
+-    uvm_down_read_mmap_sem(&current->mm->mmap_sem);
++    uvm_down_read_mmap_sem(current->mm);
+@@ -563 +563 @@ done:
+-    uvm_up_read_mmap_sem(&current->mm->mmap_sem);
++    uvm_up_read_mmap_sem(current->mm);
+--- a/nvidia-uvm/uvm8_tools.c
++++ b/nvidia-uvm/uvm8_tools.c
+@@ -228 +228 @@ static NV_STATUS map_user_pages(NvU64 us
+-    down_read(&current->mm->mmap_sem);
++    nv_mmap_read_lock(current->mm);
+@@ -230 +230 @@ static NV_STATUS map_user_pages(NvU64 us
+-    up_read(&current->mm->mmap_sem);
++    nv_mmap_read_unlock(current->mm);
+--- a/nvidia-uvm/uvm8_va_block.c
++++ b/nvidia-uvm/uvm8_va_block.c
+@@ -5531 +5531 @@ static NV_STATUS block_cpu_insert_page(u
+-    uvm_assert_mmap_sem_locked(&vma->vm_mm->mmap_sem);
++    uvm_assert_mmap_sem_locked(vma->vm_mm);
+@@ -8965 +8965 @@ NV_STATUS uvm8_test_change_pte_mapping(U
+-    uvm_down_read_mmap_sem(&current->mm->mmap_sem);
++    uvm_down_read_mmap_sem(current->mm);
+@@ -9053 +9053 @@ out:
+-    uvm_up_read_mmap_sem(&current->mm->mmap_sem);
++    uvm_up_read_mmap_sem(current->mm);
+@@ -9068 +9068 @@ NV_STATUS uvm8_test_va_block_info(UVM_TE
+-    uvm_down_read_mmap_sem(&current->mm->mmap_sem);
++    uvm_down_read_mmap_sem(current->mm);
+@@ -9086 +9086 @@ out:
+-    uvm_up_read_mmap_sem(&current->mm->mmap_sem);
++    uvm_up_read_mmap_sem(current->mm);
+@@ -9100 +9100 @@ NV_STATUS uvm8_test_va_residency_info(UV
+-    uvm_down_read_mmap_sem(&current->mm->mmap_sem);
++    uvm_down_read_mmap_sem(current->mm);
+@@ -9156 +9156 @@ out:
+-    uvm_up_read_mmap_sem(&current->mm->mmap_sem);
++    uvm_up_read_mmap_sem(current->mm);
+--- a/nvidia-uvm/uvm8_va_range.h
++++ b/nvidia-uvm/uvm8_va_range.h
+@@ -650 +650 @@ static inline struct vm_area_struct *uvm
+-    uvm_assert_mmap_sem_locked(&vma->vm_mm->mmap_sem);
++    uvm_assert_mmap_sem_locked(vma->vm_mm);
+--- a/nvidia-uvm/uvm8_va_space.c
++++ b/nvidia-uvm/uvm8_va_space.c
+@@ -517 +517 @@ NV_STATUS uvm_va_space_unregister_gpu(uv
+-    uvm_down_read_mmap_sem(&current->mm->mmap_sem);
++    uvm_down_read_mmap_sem(current->mm);
+@@ -530 +530 @@ NV_STATUS uvm_va_space_unregister_gpu(uv
+-    uvm_up_read_mmap_sem(&current->mm->mmap_sem);
++    uvm_up_read_mmap_sem(current->mm);
+@@ -955 +955 @@ NV_STATUS uvm_va_space_register_gpu_va_s
+-    uvm_down_read_mmap_sem(&current->mm->mmap_sem);
++    uvm_down_read_mmap_sem(current->mm);
+@@ -994 +994 @@ NV_STATUS uvm_va_space_register_gpu_va_s
+-    uvm_up_read_mmap_sem(&current->mm->mmap_sem);
++    uvm_up_read_mmap_sem(current->mm);
+@@ -1010 +1010 @@ error:
+-    uvm_up_read_mmap_sem(&current->mm->mmap_sem);
++    uvm_up_read_mmap_sem(current->mm);
+@@ -1082 +1082 @@ NV_STATUS uvm_va_space_unregister_gpu_va
+-    uvm_down_read_mmap_sem(&current->mm->mmap_sem);
++    uvm_down_read_mmap_sem(current->mm);
+@@ -1101 +1101 @@ done:
+-    uvm_up_read_mmap_sem(&current->mm->mmap_sem);
++    uvm_up_read_mmap_sem(current->mm);
+--- a/nvidia-uvm/uvm8_va_range.c
++++ b/nvidia-uvm/uvm8_va_range.c
+@@ -1719 +1719 @@ NV_STATUS uvm8_test_va_range_info(UVM_TE
+-    uvm_down_read_mmap_sem(&current->mm->mmap_sem);
++    uvm_down_read_mmap_sem(current->mm);
+@@ -1783 +1783 @@ out:
+-    uvm_up_read_mmap_sem(&current->mm->mmap_sem);
++    uvm_up_read_mmap_sem(current->mm);
