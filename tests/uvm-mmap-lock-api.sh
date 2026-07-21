@@ -51,3 +51,75 @@ if grep -E '^\+.*&[^;]*mmap_sem' "$patch" | grep -v 'NV_MM_HAS_MMAP_SEM' | grep 
     echo 'new UVM mmap patch adds an unguarded mmap_sem address' >&2
     exit 1
 fi
+
+if [ "$#" -gt 1 ]; then
+    echo "usage: $0 [PREPARED_367_KERNEL_TREE]" >&2
+    exit 2
+fi
+
+if [ "$#" -eq 1 ]; then
+    repo=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+    pristine=$(readlink -f "$1")
+    patchdir=$repo/debian/module/debian/patches
+    series=$work/series
+    sed 's/#HAS_UVM#//g' "$patchdir/series.in" | sed '/^[[:space:]]*#/d;/^[[:space:]]*$/d' > "$series"
+
+    apply_until()
+    {
+        target=$1
+        tree=$2
+        while IFS= read -r patch_name; do
+            test -n "$patch_name" || continue
+            patch -d "$tree" -p1 < "$patchdir/$patch_name" > "$work/$target-$patch_name.log" 2>&1 || {
+                echo "$patch_name" >&2
+                cat "$work/$target-$patch_name.log" >&2
+                exit 1
+            }
+            if [ "$patch_name" = "$target" ]; then
+                break
+            fi
+        done < "$series"
+    }
+
+    audit_tree()
+    {
+        tree=$1
+        label=$2
+        file=$tree/nvidia-uvm/uvm8_va_range.c
+        grep -F 'uvm_down_read_mmap_sem(current->mm);' "$file" >/dev/null || {
+            echo "$label: missing converted uvm_down_read_mmap_sem(current->mm)" >&2
+            exit 1
+        }
+        grep -F 'uvm_up_read_mmap_sem(current->mm);' "$file" >/dev/null || {
+            echo "$label: missing converted uvm_up_read_mmap_sem(current->mm)" >&2
+            exit 1
+        }
+        if rg -n 'uvm_(down|up)_read_mmap_sem\s*\(\s*&[^)]*mmap_sem' "$tree/nvidia-uvm"; then
+            echo "$label: old mmap_sem argument remains in production UVM source" >&2
+            exit 1
+        fi
+        if rg -n 'uvm_assert_mmap_sem_locked(_read|_write)?\s*\(\s*&[^)]*mmap_sem' "$tree/nvidia-uvm"; then
+            echo "$label: old mmap_sem assertion argument remains in production UVM source" >&2
+            exit 1
+        fi
+        if rg -n 'uvm_record_(lock|unlock)_mmap_sem_(read|write)\s*\(\s*&[^)]*mmap_sem' "$tree/nvidia-uvm"; then
+            echo "$label: old mmap_sem record argument remains in production UVM source" >&2
+            exit 1
+        fi
+    }
+
+    cp -a "$pristine/." "$work/target-tree"
+    apply_until backport-uvm-mmap-lock-api.patch "$work/target-tree"
+    audit_tree "$work/target-tree" target-patch-tree
+
+    cp -a "$pristine/." "$work/full-tree"
+    while IFS= read -r patch_name; do
+        test -n "$patch_name" || continue
+        patch -d "$work/full-tree" -p1 < "$patchdir/$patch_name" > "$work/full-$patch_name.log" 2>&1 || {
+            echo "$patch_name" >&2
+            cat "$work/full-$patch_name.log" >&2
+            exit 1
+        }
+    done < "$series"
+    audit_tree "$work/full-tree" complete-series-tree
+fi
