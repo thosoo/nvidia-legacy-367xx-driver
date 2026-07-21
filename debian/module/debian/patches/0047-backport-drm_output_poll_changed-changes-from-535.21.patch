@@ -9,10 +9,7 @@ Description: Add a conftest for the removed drm_mode_config_funcs
 
 --- a/conftest.sh
 +++ b/conftest.sh
-@@ -3010,6 +3010,25 @@
-             compile_check_conftest "$CODE" "NV_DRM_DRIVER_HAS_DUMB_DESTROY" "" "types"
-         ;;
- 
+@@ -3292,0 +3293,19 @@ compile_test() {
 +        drm_output_poll_changed)
 +            #
 +            # Determine whether drm_mode_config_funcs.output_poll_changed is present.
@@ -32,33 +29,17 @@ Description: Add a conftest for the removed drm_mode_config_funcs
 +            compile_check_conftest "$CODE" "NV_DRM_OUTPUT_POLL_CHANGED_PRESENT" "" "types"
 +        ;;
 +
-         # When adding a new conftest entry, please use the correct format for
-         # specifying the relevant upstream Linux kernel commit.
-         #
 --- a/nvidia-drm/nvidia-drm-drv.c
 +++ b/nvidia-drm/nvidia-drm-drv.c
-@@ -60,6 +60,7 @@
- 
- #if defined(NV_DRM_ATOMIC_MODESET_AVAILABLE)
- 
+@@ -62,0 +63 @@ static struct nvidia_drm_device *dev_lis
 +#if defined(NV_DRM_OUTPUT_POLL_CHANGED_PRESENT)
- static void nvidia_drm_output_poll_changed(struct drm_device *dev)
- {
-     struct drm_connector *connector = NULL;
-@@ -82,7 +83,9 @@
-     .atomic_check  = nvidia_drm_atomic_check,
-     .atomic_commit = nvidia_drm_atomic_commit,
- 
+@@ -77,0 +79 @@ static void nvidia_drm_output_poll_chang
++#endif /* NV_DRM_OUTPUT_POLL_CHANGED_PRESENT */
+@@ -84,0 +87 @@ static const struct drm_mode_config_func
 +#if defined(NV_DRM_OUTPUT_POLL_CHANGED_PRESENT)
-     .output_poll_changed = nvidia_drm_output_poll_changed,
+@@ -85,0 +89 @@ static const struct drm_mode_config_func
 +#endif
- };
- 
- static void nvidia_drm_event_callback(const struct NvKmsKapiEvent *event)
 --- a/nvidia-drm/nvidia-drm.Kbuild
 +++ b/nvidia-drm/nvidia-drm.Kbuild
-@@ -73,3 +73,4 @@
- NV_CONFTEST_TYPE_COMPILE_TESTS += drm_helper_mode_fill_fb_struct_has_const_mode_cmd_arg
- NV_CONFTEST_TYPE_COMPILE_TESTS += drm_connector_has_override_edid
- NV_CONFTEST_TYPE_COMPILE_TESTS += drm_driver_has_dumb_destroy
+@@ -75,0 +76 @@ NV_CONFTEST_TYPE_COMPILE_TESTS += drm_dr
 +NV_CONFTEST_TYPE_COMPILE_TESTS += drm_output_poll_changed

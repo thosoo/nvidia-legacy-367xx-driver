@@ -166,6 +166,7 @@ run_repository_test uvm-mmap-lock-api tests/uvm-mmap-lock-api.sh
 run_repository_test uvm-vm-fault-api tests/uvm-vm-fault-api.sh
 run_repository_test uvm-dependency-barrier tests/uvm-dependency-barrier.sh
 run_repository_test uvm-interface-header-order tests/uvm-interface-header-order.sh
+run_repository_test drm-preprocessor-balance-fixtures tests/drm-preprocessor-balance.sh
 
 set_stage module-series-integrity
 module_integrity_tree=$(tools/prepare-kernel-tree.sh "$suite" /work/module-series-integrity)
@@ -173,6 +174,7 @@ printf '%s\n' "$module_integrity_tree" > /work/logs/module-series-integrity-tree
 run_repository_test module-patch-integrity-pr5 tests/module-patch-integrity.sh "$module_integrity_tree"
 run_repository_test module-patch-integrity-full tests/module-patch-integrity.sh --full-series "$module_integrity_tree"
 run_repository_test patch-series-position tests/patch-series-position.sh "$module_integrity_tree"
+run_repository_test drm-preprocessor-balance tests/drm-preprocessor-balance.sh "$module_integrity_tree"
 run_repository_test uvm-mmap-lock-api-series tests/uvm-mmap-lock-api.sh "$module_integrity_tree"
 
 set_stage source-build
