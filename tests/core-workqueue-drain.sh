@@ -72,7 +72,7 @@ for text in ['typedef struct nv_task_s nv_task_t', 'nv_task_t task;', 'container
         raise SystemExit(f'missing work-object layout text: {text}')
 if re.search(r'#define NV_WORKQUEUE_INIT\([^)]*\bhandler\b[^)]*\)', header):
     raise SystemExit('NV_WORKQUEUE_INIT still uses colliding handler parameter')
-for required in ['NV_WQ_UNINITIALIZED', 'NV_WQ_INITIALIZING', 'NV_WQ_RUNNING', 'NV_WQ_DRAINING', 'NV_WQ_STOPPING', 'NV_WQ_STOPPED', 'nv_linux_workqueue_has_work', 'nv_linux_workqueue_barrier_done', 'nv_linux_workqueue_shutdown_done', 'nv_linux_workqueue_worker_wait', 'nv_linux_workqueue_flush_wait', 'nv_linux_workqueue_shutdown_wait', 'kthread_create_on_node', 'kthread_stop']:
+for required in ['NV_WQ_UNINITIALIZED', 'NV_WQ_INITIALIZING', 'NV_WQ_RUNNING', 'NV_WQ_DRAINING', 'NV_WQ_STOPPING', 'NV_WQ_STOPPED', 'nv_linux_workqueue_has_work', 'nv_linux_workqueue_barrier_done', 'nv_linux_workqueue_worker_wait', 'nv_linux_workqueue_flush_wait', 'nv_linux_workqueue_shutdown_wait', 'kthread_create_on_node', 'kthread_stop']:
     if required not in core:
         raise SystemExit(f'{required} missing')
 main=re.search(r'static int nv_linux_workqueue_main\([^)]*\)\s*\{(?P<body>.*?)\n\}', core, re.S).group('body')
@@ -127,10 +127,13 @@ if '(nv_linux_workqueue_state == NV_WQ_DRAINING) ||' not in shutdown:
     raise SystemExit('DRAINING shutdown callers must wait instead of becoming owners')
 if shutdown.count('kthread_stop(thread)') != 1:
     raise SystemExit('exactly one shutdown path may call kthread_stop')
-failure_match=re.search(r'if \(rc != 0\)\s*\{(?P<body>.*?)\n        \}', shutdown, re.S)
-if not failure_match or 'nv_linux_workqueue_generation++' not in failure_match.group('body') or 'wake_up_all(&nv_linux_workqueue_shutdown_wait)' not in failure_match.group('body'):
-    raise SystemExit('owner drain-failure path must publish result/generation and wake waiters')
-for text in ['NV_WQ_UNINITIALIZED', 'NV_WQ_INITIALIZING', 'NV_WQ_DRAINING', 'NV_WQ_STOPPING', 'NV_WQ_STOPPED', 'nv_linux_workqueue_shutdown_result', 'nv_linux_workqueue_generation', 'nv_linux_workqueue_generation_done', 'wait_event(nv_linux_workqueue_shutdown_wait', 'nv_linux_workqueue_initializing_done', 'wake_up_all(&nv_linux_workqueue_shutdown_wait)', 'nv_linux_workqueue_thread = NULL', 'return -EDEADLK;', 'return 0;']:
+if 'nv_linux_workqueue_shutdown_result' in shutdown:
+    raise SystemExit('shutdown result handoff must not use a mutable global result')
+if 'nv_linux_workqueue_completed_sequence ==' not in shutdown or 'nv_linux_workqueue_next_sequence' not in shutdown:
+    raise SystemExit('shutdown quiescence must compare completed and next sequence')
+if shutdown.find('completed_sequence ==') > shutdown.find('nv_linux_workqueue_state = NV_WQ_STOPPING'):
+    raise SystemExit('stable sequence quiescence must be checked before STOPPING')
+for text in ['NV_WQ_UNINITIALIZED', 'NV_WQ_INITIALIZING', 'NV_WQ_DRAINING', 'NV_WQ_STOPPING', 'NV_WQ_STOPPED', 'nv_linux_workqueue_generation', 'nv_linux_workqueue_generation_done', 'wait_event(nv_linux_workqueue_shutdown_wait', 'nv_linux_workqueue_initializing_done', 'wake_up_all(&nv_linux_workqueue_shutdown_wait)', 'nv_linux_workqueue_thread = NULL', 'return -EDEADLK;', 'return 0;']:
     if text not in shutdown:
         raise SystemExit(f'shutdown state machine missing {text}')
 rm_fail_start=core.find('if (!rm_init_rm(sp))')
@@ -193,7 +196,7 @@ echo state-model
 cat > "$work/state-model.c" <<'CMODEL'
 #include <assert.h>
 typedef enum { NV_WQ_UNINITIALIZED, NV_WQ_INITIALIZING, NV_WQ_RUNNING, NV_WQ_DRAINING, NV_WQ_STOPPING, NV_WQ_STOPPED } state_t;
-typedef struct { state_t state; unsigned long long generation; int result; int stop_calls; } queue_t;
+typedef struct { state_t state; unsigned long long generation; int stop_calls; unsigned long long next_sequence; unsigned long long completed_sequence; int queued_items; int worker_running; } queue_t;
 typedef struct { int queued, running, requeueable; unsigned long long queued_sequence; } task_t;
 static int can_schedule(task_t *task, state_t state, int thread) { return thread && (state == NV_WQ_RUNNING || state == NV_WQ_DRAINING) && !task->queued && (task->requeueable || (task->queued_sequence == 0)); }
 static int begin_shutdown(queue_t *q, int self, unsigned long long *observed) {
@@ -203,20 +206,24 @@ static int begin_shutdown(queue_t *q, int self, unsigned long long *observed) {
     q->state = NV_WQ_DRAINING; return 2;
 }
 static int waiter_done(queue_t *q, unsigned long long observed) { return q->generation != observed; }
-static void owner_stop(queue_t *q, int result) {
+static void accept_work(queue_t *q) { assert(q->state == NV_WQ_RUNNING || q->state == NV_WQ_DRAINING); q->next_sequence++; q->queued_items++; }
+static void worker_dequeue(queue_t *q) { assert(q->queued_items > 0); q->queued_items--; q->worker_running = 1; }
+static void worker_complete(queue_t *q) { assert(q->worker_running); q->worker_running = 0; q->completed_sequence++; }
+static int stable_quiescent(queue_t *q) { return q->queued_items == 0 && q->completed_sequence == q->next_sequence; }
+static int owner_try_stop(queue_t *q) {
     assert(q->state == NV_WQ_DRAINING);
-    if (result) { q->state = NV_WQ_RUNNING; q->result = result; q->generation++; return; }
+    if (!stable_quiescent(q)) return 0;
     q->state = NV_WQ_STOPPING;
     q->stop_calls++;
     q->state = NV_WQ_STOPPED;
-    q->result = 0;
     q->generation++;
+    return 1;
 }
 static int begin_init(queue_t *q) {
     if (q->state == NV_WQ_INITIALIZING || q->state == NV_WQ_RUNNING || q->state == NV_WQ_DRAINING || q->state == NV_WQ_STOPPING) return -1;
     q->state = NV_WQ_INITIALIZING; return 0;
 }
-static void finish_init(queue_t *q, int ok) { q->state = ok ? NV_WQ_RUNNING : NV_WQ_STOPPED; q->generation++; }
+static void finish_init(queue_t *q, int ok) { q->state = ok ? NV_WQ_RUNNING : NV_WQ_STOPPED; if (!ok) q->generation++; }
 int main(void) {
     task_t dyn = {0,0,0,0};
     assert(can_schedule(&dyn, NV_WQ_RUNNING, 1));
@@ -230,17 +237,18 @@ int main(void) {
     assert(can_schedule(&stat, NV_WQ_DRAINING, 1));
     assert(!can_schedule(&stat, NV_WQ_STOPPING, 1));
     stat.queued = 1; assert(!can_schedule(&stat, NV_WQ_RUNNING, 1));
-    queue_t q = { NV_WQ_RUNNING, 7, 0, 0 }; unsigned long long seen = 0;
+    queue_t q = { NV_WQ_RUNNING, 7, 0, 0, 0, 0, 0 }; unsigned long long seen = 0;
     assert(begin_shutdown(&q, 0, &seen) == 2 && q.state == NV_WQ_DRAINING);
     assert(begin_shutdown(&q, 0, &seen) == 1 && seen == 7 && q.state == NV_WQ_DRAINING);
-    owner_stop(&q, 0); assert(q.stop_calls == 1 && q.state == NV_WQ_STOPPED && q.generation == 8 && waiter_done(&q, seen));
+    accept_work(&q); worker_dequeue(&q); assert(q.queued_items == 0 && q.completed_sequence != q.next_sequence); assert(!owner_try_stop(&q));
+    accept_work(&q); worker_complete(&q); assert(!stable_quiescent(&q)); worker_dequeue(&q); worker_complete(&q); assert(stable_quiescent(&q));
+    assert(owner_try_stop(&q) && q.stop_calls == 1 && q.state == NV_WQ_STOPPED && q.generation == 8 && waiter_done(&q, seen));
     assert(begin_shutdown(&q, 0, &seen) == 0 && q.stop_calls == 1);
-    q.state = NV_WQ_STOPPING; q.generation = 9; assert(begin_shutdown(&q, 0, &seen) == 1 && seen == 9);
-    q.generation = 10; assert(waiter_done(&q, seen));
     q.state = NV_WQ_RUNNING; assert(begin_shutdown(&q, 1, &seen) == -11 && q.state == NV_WQ_RUNNING);
-    q.state = NV_WQ_INITIALIZING; q.generation = 11; assert(begin_shutdown(&q, 0, &seen) == 1 && seen == 11); finish_init(&q, 1); assert(waiter_done(&q, seen));
-    q.state = NV_WQ_STOPPED; assert(begin_init(&q) == 0 && begin_init(&q) == -1); finish_init(&q, 0); assert(q.state == NV_WQ_STOPPED);
-    assert(begin_init(&q) == 0); finish_init(&q, 1); assert(q.state == NV_WQ_RUNNING);
+    q.state = NV_WQ_INITIALIZING; q.generation = 11; assert(begin_shutdown(&q, 0, &seen) == 1 && seen == 11); finish_init(&q, 1); assert(q.state == NV_WQ_RUNNING && q.generation == 11);
+    q.state = NV_WQ_STOPPED; assert(begin_init(&q) == 0 && begin_init(&q) == -1); finish_init(&q, 0); assert(q.state == NV_WQ_STOPPED && q.generation == 12);
+    assert(begin_init(&q) == 0); finish_init(&q, 1); assert(q.state == NV_WQ_RUNNING && q.generation == 12);
+    q.state = NV_WQ_DRAINING; q.generation = 20; assert(begin_shutdown(&q, 0, &seen) == 1); q.state = NV_WQ_STOPPED; q.generation = 21; assert(waiter_done(&q, seen)); assert(begin_init(&q) == 0); finish_init(&q, 1); assert(q.state == NV_WQ_RUNNING);
     return 0;
 }
 CMODEL
