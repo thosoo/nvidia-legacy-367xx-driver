@@ -1,10 +1,5 @@
-Description: Drain only NVIDIA core work with a kthread-backed queue
-Author: OpenAI Codex
-Forwarded: not-needed
-
-diff -Naur '--exclude=*.orig' a/common/inc/nv-linux.h b/common/inc/nv-linux.h
---- a/common/inc/nv-linux.h	2026-07-22 03:47:59.811809193 +0000
-+++ b/common/inc/nv-linux.h	2026-07-22 03:48:01.083809193 +0000
+--- a/common/inc/nv-linux.h
++++ b/common/inc/nv-linux.h
 @@ -85,6 +85,7 @@
  #include <linux/list.h>             /* circular linked list             */
  #include <linux/stddef.h>           /* NULL, offsetof                   */
@@ -13,7 +8,7 @@ diff -Naur '--exclude=*.orig' a/common/inc/nv-linux.h b/common/inc/nv-linux.h
  #include <linux/string.h>           /* strchr(), strpbrk()              */
 
  #include <linux/ctype.h>            /* isspace(), etc                   */
-@@ -1732,32 +1733,72 @@
+@@ -1732,32 +1733,70 @@
  #endif /* defined(NV_SG_ALLOC_TABLE_FROM_PAGES_PRESENT) &&
            !defined(NV_DOM0_KERNEL_PRESENT) */
 
@@ -49,14 +44,12 @@ diff -Naur '--exclude=*.orig' a/common/inc/nv-linux.h b/common/inc/nv-linux.h
 -#define NV_WORKQUEUE_FLUSH()                           \
 -    flush_scheduled_work();
 +int nv_linux_workqueue_init(void);
-+void nv_linux_workqueue_shutdown(void);
++int nv_linux_workqueue_shutdown(void);
 +int nv_linux_workqueue_schedule(nv_task_t *task);
 +int nv_linux_workqueue_flush(void);
-+void nv_linux_workqueue_flush_required(const char *file, int line);
 +
 +#define NV_WORKQUEUE_SCHEDULE(_work) nv_linux_workqueue_schedule(_work)
 +#define NV_WORKQUEUE_FLUSH_STATUS() nv_linux_workqueue_flush()
-+#define NV_WORKQUEUE_FLUSH() nv_linux_workqueue_flush_required(__FILE__, __LINE__)
  #if (NV_INIT_WORK_ARGUMENT_COUNT == 2)
 -#define NV_WORKQUEUE_INIT(tq,handler,data)             \
 +#define NV_WORKQUEUE_INIT(_tq,_handler,_data)          \
@@ -98,10 +91,9 @@ diff -Naur '--exclude=*.orig' a/common/inc/nv-linux.h b/common/inc/nv-linux.h
      }
  #define NV_WORKQUEUE_DATA_T void
  #define NV_WORKQUEUE_UNPACK_DATA(tq) (nv_work_t *)(tq)
-diff -Naur '--exclude=*.orig' a/nvidia/nv.c b/nvidia/nv.c
---- a/nvidia/nv.c	2026-07-22 03:47:59.791809193 +0000
-+++ b/nvidia/nv.c	2026-07-22 03:48:01.087809193 +0000
-@@ -55,6 +55,217 @@
+--- a/nvidia/nv.c
++++ b/nvidia/nv.c
+@@ -55,6 +55,210 @@
  static NvU32 num_nv_devices = 0;
  NvU32 num_probed_nv_devices = 0;
 
@@ -275,94 +267,116 @@ diff -Naur '--exclude=*.orig' a/nvidia/nv.c b/nvidia/nv.c
 +    return 0;
 +}
 +
-+void nv_linux_workqueue_flush_required(const char *file, int line)
-+{
-+    int rc = nv_linux_workqueue_flush();
 +
-+    if (rc != 0)
-+    {
-+        nv_printf(NV_DBG_ERRORS,
-+                  "NVRM: NV_WORKQUEUE_FLUSH failed at %s:%d: %d\n",
-+                  file, line, rc);
-+    }
-+}
-+
-+void nv_linux_workqueue_shutdown(void)
++int nv_linux_workqueue_shutdown(void)
 +{
 +    struct task_struct *thread;
 +    unsigned long flags;
 +
 +    spin_lock_irqsave(&nv_linux_workqueue_lock, flags);
-+    nv_linux_workqueue_stopping = NV_TRUE;
 +    thread = nv_linux_workqueue_thread;
++    if (current == thread)
++    {
++        spin_unlock_irqrestore(&nv_linux_workqueue_lock, flags);
++        nv_printf(NV_DBG_ERRORS,
++                  "NVRM: nv_linux_workqueue_shutdown: called from worker thread\n");
++        return -EDEADLK;
++    }
++    nv_linux_workqueue_stopping = NV_TRUE;
 +    spin_unlock_irqrestore(&nv_linux_workqueue_lock, flags);
 +
 +    wake_up(&nv_linux_workqueue_worker_wait);
 +
 +    if (thread != NULL)
 +    {
-+        if (current == thread)
-+        {
-+            nv_printf(NV_DBG_ERRORS,
-+                      "NVRM: nv_linux_workqueue_shutdown: called from worker thread\n");
-+            return;
-+        }
-+        (void)nv_linux_workqueue_flush();
++        if (nv_linux_workqueue_flush() != 0)
++            return -EDEADLK;
 +        kthread_stop(thread);
 +    }
 +
 +    spin_lock_irqsave(&nv_linux_workqueue_lock, flags);
 +    nv_linux_workqueue_thread = NULL;
 +    spin_unlock_irqrestore(&nv_linux_workqueue_lock, flags);
++
++    return 0;
 +}
 +
  NvU32 nv_assign_gpu_count = 0;
  nv_pci_info_t nv_assign_gpu_pci_info[NV_MAX_DEVICES];
 
-@@ -682,12 +873,21 @@
+@@ -682,12 +886,22 @@
          goto failed5;
      }
 
+-    if (!rm_init_rm(sp))
 +    rc = nv_linux_workqueue_init();
 +    if (rc != 0)
-+    {
-+        nv_kmem_cache_free_stack(sp);
-+        NV_KMEM_CACHE_DESTROY(nvidia_stack_t_cache);
-+        goto failed5;
-+    }
-+
-     if (!rm_init_rm(sp))
      {
          nv_kmem_cache_free_stack(sp);
          NV_KMEM_CACHE_DESTROY(nvidia_stack_t_cache);
++        goto failed5;
++    }
++
++    if (!rm_init_rm(sp))
++    {
          nv_printf(NV_DBG_ERRORS, "NVRM: rm_init_rm() failed!\n");
          rc = -EIO;
-+        nv_linux_workqueue_shutdown();
++        if (nv_linux_workqueue_shutdown() != 0)
++            nv_printf(NV_DBG_ERRORS, "NVRM: workqueue shutdown failed during RM init rollback\n");
++        nv_kmem_cache_free_stack(sp);
++        NV_KMEM_CACHE_DESTROY(nvidia_stack_t_cache);
          goto failed5;
      }
 
-@@ -988,6 +1188,8 @@
+@@ -985,6 +1199,9 @@
+     nv_unregister_chrdev((void *)&nv_fops);
+
+ failed4:
++    if (nv_linux_workqueue_shutdown() != 0)
++        nv_printf(NV_DBG_ERRORS, "NVRM: workqueue shutdown failed during init rollback\n");
++
      nv_lock_destroy_locks(sp, nv);
      rm_shutdown_rm(sp);
 
-+    nv_linux_workqueue_shutdown();
-+
-     nv_kmem_cache_free_stack(sp);
-     NV_KMEM_CACHE_DESTROY(nvidia_stack_t_cache);
+@@ -1022,6 +1239,9 @@
 
-@@ -1027,6 +1229,8 @@
+     nv_unregister_chrdev((void *)&nv_fops);
+
++    if (nv_linux_workqueue_shutdown() != 0)
++        nv_printf(NV_DBG_ERRORS, "NVRM: workqueue shutdown failed during module exit\n");
++
+     nv_lock_destroy_locks(sp, nv);
+
      // Shutdown the resource manager
-     rm_shutdown_rm(sp);
+@@ -1662,7 +1882,11 @@
+     if (NV_IS_GVI_DEVICE(nv))
+     {
+         rm_shutdown_gvi_device(sp, nv);
+-        NV_WORKQUEUE_FLUSH();
++        if (NV_WORKQUEUE_FLUSH_STATUS() != 0)
++        {
++            nv_printf(NV_DBG_ERRORS, "NVRM: GVI workqueue flush failed; aborting device stop\n");
++            return;
++        }
+         free_irq(nv->interrupt_line, (void *)nvl);
+     }
+     else
+@@ -3389,7 +3613,11 @@
 
-+    nv_linux_workqueue_shutdown();
-+
- #if defined(NVCPU_X86_64) && defined(CONFIG_IA32_EMULATION) && \
-   !defined(NV_FILE_OPERATIONS_HAS_COMPAT_IOCTL)
-     rm_unregister_compatible_ioctls(sp);
-diff -Naur '--exclude=*.orig' a/common/inc/nv-proto.h b/common/inc/nv-proto.h
---- a/common/inc/nv-proto.h	2026-07-22 00:00:00.000000000 +0000
-+++ b/common/inc/nv-proto.h	2026-07-22 00:00:00.000000000 +0000
-@@ -23,12 +23,8 @@
+     if (NV_IS_GVI_DEVICE(nv))
+     {
+-        NV_WORKQUEUE_FLUSH();
++        if (NV_WORKQUEUE_FLUSH_STATUS() != 0)
++        {
++            nv_printf(NV_DBG_ERRORS, "NVRM: GVI workqueue flush failed; aborting device removal\n");
++            return;
++        }
+         rm_gvi_detach_device(sp, nv);
+         rm_gvi_free_private_state(sp, nv);
+     }
+--- a/common/inc/nv-proto.h
++++ b/common/inc/nv-proto.h
+@@ -22,11 +22,7 @@
  irqreturn_t nv_gvi_kern_isr             (int, void *);
  #endif
 
@@ -375,10 +389,8 @@ diff -Naur '--exclude=*.orig' a/common/inc/nv-proto.h b/common/inc/nv-proto.h
 
  #if defined(NV_PM_SUPPORT_DEVICE_DRIVER_MODEL)
  int         nv_gvi_kern_suspend         (struct pci_dev *, pm_message_t);
-
-diff -Naur '--exclude=*.orig' a/nvidia/os-interface.c b/nvidia/os-interface.c
---- a/nvidia/os-interface.c	2026-07-22 03:47:59.815809193 +0000
-+++ b/nvidia/os-interface.c	2026-07-22 03:48:01.087809193 +0000
+--- a/nvidia/os-interface.c
++++ b/nvidia/os-interface.c
 @@ -1049,8 +1049,6 @@
 
      rm_execute_work_item(sp, work->data);
@@ -388,7 +400,7 @@ diff -Naur '--exclude=*.orig' a/nvidia/os-interface.c b/nvidia/os-interface.c
      nv_kmem_cache_free_stack(sp);
  }
 
-@@ -1070,8 +1068,14 @@
+@@ -1070,7 +1068,13 @@
 
      NV_WORKQUEUE_INIT(&work->task, os_execute_work_item,
                        (void *)work);
@@ -403,8 +415,7 @@ diff -Naur '--exclude=*.orig' a/nvidia/os-interface.c b/nvidia/os-interface.c
 
      return NV_OK;
  }
-
-@@ -1080,8 +1083,8 @@
+@@ -1079,8 +1083,8 @@
  {
      if (NV_MAY_SLEEP())
      {
@@ -414,38 +425,9 @@ diff -Naur '--exclude=*.orig' a/nvidia/os-interface.c b/nvidia/os-interface.c
 +            NV_OK : NV_ERR_ILLEGAL_ACTION;
      }
      else
-
-diff -Naur '--exclude=*.orig' a/nvidia/nv.c b/nvidia/nv.c
---- a/nvidia/nv.c	2026-07-22 04:30:00.000000000 +0000
-+++ b/nvidia/nv.c	2026-07-22 04:30:00.000000000 +0000
-@@ -1880,6 +1880,10 @@
-     if (NV_IS_GVI_DEVICE(nv))
      {
-         rm_shutdown_gvi_device(sp, nv);
--        NV_WORKQUEUE_FLUSH();
-+        if (NV_WORKQUEUE_FLUSH_STATUS() != 0)
-+        {
-+            nv_printf(NV_DBG_ERRORS, "NVRM: GVI workqueue flush failed; aborting device stop\n");
-+            return;
-+        }
-         free_irq(nv->interrupt_line, (void *)nvl);
-     }
-@@ -3607,7 +3611,11 @@
-
-     if (NV_IS_GVI_DEVICE(nv))
-     {
--        NV_WORKQUEUE_FLUSH();
-+        if (NV_WORKQUEUE_FLUSH_STATUS() != 0)
-+        {
-+            nv_printf(NV_DBG_ERRORS, "NVRM: GVI workqueue flush failed; aborting device removal\n");
-+            return;
-+        }
-         rm_gvi_detach_device(sp, nv);
-         rm_gvi_free_private_state(sp, nv);
-     }
-diff -Naur '--exclude=*.orig' a/nvidia/nv-gvi.c b/nvidia/nv-gvi.c
---- a/nvidia/nv-gvi.c	2026-07-22 04:30:00.000000000 +0000
-+++ b/nvidia/nv-gvi.c	2026-07-22 04:30:00.000000000 +0000
+--- a/nvidia/nv-gvi.c
++++ b/nvidia/nv-gvi.c
 @@ -87,7 +87,12 @@
 
      nv->flags |= NV_FLAG_GVI_IN_SUSPEND;

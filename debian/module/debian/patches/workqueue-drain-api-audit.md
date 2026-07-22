@@ -87,7 +87,7 @@ sequence, including static work requeued while the previous callback is running.
 
 ## Flush-barrier and wait-predicate semantics
 
-`NV_WORKQUEUE_FLUSH()` snapshots `next_sequence` under the queue lock and waits
+`NV_WORKQUEUE_FLUSH_STATUS()` snapshots `next_sequence` under the queue lock and waits
 on a separate flush wait queue until a helper has acquired the same lock and
 observed `completed_sequence >= barrier`. Later submissions receive higher
 sequence numbers and do not delay an older flush. Concurrent flushers are safe
@@ -101,29 +101,17 @@ predicate recheck.
 
 ## Shutdown and initialization semantics
 
-Queue initialization is attempted exactly once after the stack cache and init
-stack are available. If later module initialization fails, rollback calls
-`nv_linux_workqueue_shutdown()` before the stack cache is destroyed. Module exit
-calls shutdown after RM shutdown and before compatibility ioctl unregister and
-stack-cache teardown. Shutdown first sets `stopping` under the lock so new
+Module-init failure ordering: queue initialization is attempted exactly once after the stack cache and init stack are available; if `rm_init_rm()` fails, shutdown rejects new submissions, drains accepted work, and stops the worker before freeing the init stack or destroying `nvidia_stack_t_cache`. Later rollback ordering: queue shutdown runs before NVIDIA locks are destroyed and before `rm_shutdown_rm()`. Module-exit ordering: queue shutdown runs before RM shutdown and stack-cache teardown. Shutdown first verifies it is not running on `nvidia-wq`; only then it sets `stopping` under the lock so new
 submissions are rejected, wakes the worker wait queue, flushes all accepted work,
 then calls `kthread_stop()` and clears the thread pointer under the lock after
-thread exit. Shutdown from the worker thread is diagnosed and returns instead of self-stopping.
+thread exit. Shutdown from the worker thread is detected before mutating stopping state and returns `-EDEADLK` instead of self-stopping.
 
-A flush from the queue thread is diagnosed and returns `-EDEADLK` instead of silently deadlocking the single worker. `os_flush_work_queue()` maps that to `NV_ERR_ILLEGAL_ACTION`. Direct GVI teardown/removal/suspend sites call the status-returning flush and fail closed: void teardown paths return before freeing IRQ/GVI state, and suspend returns the error path.
+A flush from the queue thread is diagnosed and returns `-EDEADLK` instead of silently deadlocking the single worker. `os_flush_work_queue()` maps that to `NV_ERR_ILLEGAL_ACTION`. Direct GVI teardown/removal/suspend sites are user-close, PCI driver-core, and PM-core contexts respectively, not `nvidia-wq` callback context; they call the status-returning flush and treat failure as an invariant violation/fail-closed path.
 
 ## Single-thread serialization and scope
 
 The queue is module-global, preserving the old core `flush_scheduled_work()`
-scope rather than creating per-device flushes. Later NVIDIA branches introduced
-kthread queue infrastructure (`nv-kthread-q.c`) for NVIDIA-owned asynchronous
-execution, but exact branch semantics and proprietary RM recursion behavior still
-require build/runtime validation. This patch therefore keeps the conservative
-old global scope: one device's earlier accepted core work can delay another
-flush. Visible open source shows no callback calling `os_flush_work_queue()` and
-no GVI callback self-requeue, but visible-source absence is not treated as proof
-for proprietary RM behavior; the defensive worker-flush check prevents silent
-self-deadlock.
+scope rather than creating per-device flushes. The authoritative later-source question is still open for semantic review. Public build evidence for 525.60.11 shows NVIDIA shipping `nv-kthread-q.c` in `nvidia`, `nvidia-uvm`, and `nvidia-modeset` DKMS builds, with `kthread_create_on_node()` and `kthread_create()` call sites in that file. That establishes the exact file/version family to inspect, but it does not by itself prove function-level equivalence for 367 RM work. Until a reviewer inspects that later source and confirms worker count, recursion behavior, callback wait behavior, flush-from-worker behavior, and multi-GPU scope, this PR must remain draft. This patch therefore keeps the old global flush scope rather than per-device scope: one device's earlier accepted core work can delay another flush. Visible 367 open source shows no callback calling `os_flush_work_queue()` and no GVI callback self-requeue, but visible-source absence is not treated as proof for proprietary RM behavior; the defensive worker-flush check prevents silent self-deadlock.
 
 ## Lock, deadlock, and memory ordering
 

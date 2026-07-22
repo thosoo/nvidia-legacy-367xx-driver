@@ -6,8 +6,9 @@ jobs:
     runs-on: ubuntu-latest
     container: debian:trixie
     steps:
+      - run: apt-get update && apt-get install -y --no-install-recommends git curl python3 build-essential ripgrep make perl dpkg-dev debhelper dh-dkms quilt xz-utils ca-certificates
       - uses: actions/checkout@v4
-      - run: apt-get update && apt-get install -y --no-install-recommends ripgrep make perl dpkg-dev debhelper dh-dkms quilt xz-utils ca-certificates git curl build-essential
+      - run: git rev-parse --is-inside-work-tree && command -v python3 && command -v cc && command -v curl
       - run: tests/no-390xx-leaks.sh
       - run: tests/amd64-only.sh
       - run: tests/no-proprietary-artifacts.sh

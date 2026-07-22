@@ -18,6 +18,7 @@ uvm=lines.index('backport-uvm-core-api-compat.patch')
 assert wq > uvm, 'workqueue patch must follow active compatibility sequence'
 PY
 
+echo prepare-tree
 prepared=${1:-}
 cleanup=:
 if [ -z "$prepared" ]; then
@@ -27,6 +28,7 @@ if [ -z "$prepared" ]; then
 fi
 trap "$cleanup" EXIT
 
+echo apply-series
 series_file=$(mktemp)
 sed 's/#HAS_UVM#//g' "$series" | sed '/^[[:space:]]*#/d; /^[[:space:]]*$/d' > "$series_file"
 while IFS= read -r p; do
@@ -39,6 +41,7 @@ if find "$prepared" \( -name '*.rej' -o -name '*.orig' -o -name '*.ko' -o -name 
     exit 1
 fi
 
+echo inspect-patched-source
 header=$prepared/common/inc/nv-linux.h
 core=$prepared/nvidia/nv.c
 osi=$prepared/nvidia/os-interface.c
@@ -92,9 +95,37 @@ if 'current == nv_linux_workqueue_thread' not in flush or 'return -EDEADLK;' not
 schedule=re.search(r'int nv_linux_workqueue_schedule\([^)]*\)\s*\{(?P<body>.*?)\n\}', core, re.S).group('body')
 if 'task->requeueable || (task->queued_sequence == 0)' not in schedule:
     raise SystemExit('dynamic one-shot/static requeue schedule rule missing')
-for needle in ['NV_WORKQUEUE_FLUSH_STATUS();', 'return;', 'return status;']:
+for needle in ['nv_linux_workqueue_shutdown() != 0', 'NV_WORKQUEUE_FLUSH_STATUS() != 0', 'return;', 'return status;']:
     if needle not in core + gvi:
         raise SystemExit(f'direct flush call-site handling missing {needle}')
+
+shutdown_start=core.find('int nv_linux_workqueue_shutdown(void)')
+shutdown_end=core.find('NvU32 nv_assign_gpu_count', shutdown_start)
+shutdown=core[shutdown_start:shutdown_end]
+if not (shutdown.find('current == thread') < shutdown.find('nv_linux_workqueue_stopping = NV_TRUE')):
+    raise SystemExit('shutdown self-check must precede stopping transition')
+if 'return -EDEADLK;' not in shutdown or 'return 0;' not in shutdown:
+    raise SystemExit('shutdown must return explicit status')
+def order(haystack, first, second, label):
+    i=haystack.find(first); j=haystack.find(second)
+    if i < 0 or j < 0 or i > j:
+        raise SystemExit(label)
+rm_fail_start=core.find('if (!rm_init_rm(sp))')
+rm_fail_end=core.find('// init the nvidia control device', rm_fail_start)
+rm_fail=core[rm_fail_start:rm_fail_end]
+order(rm_fail, 'nv_linux_workqueue_shutdown() != 0', 'nv_kmem_cache_free_stack(sp);', 'rm_init_rm failure frees stack before queue shutdown')
+order(rm_fail, 'nv_linux_workqueue_shutdown() != 0', 'NV_KMEM_CACHE_DESTROY(nvidia_stack_t_cache);', 'rm_init_rm failure destroys stack cache before queue shutdown')
+failed4_start=core.find('failed4:')
+failed4_end=core.find('failed5:', failed4_start)
+failed4=core[failed4_start:failed4_end]
+order(failed4, 'nv_linux_workqueue_shutdown() != 0', 'nv_lock_destroy_locks(sp, nv);', 'later init rollback destroys locks before queue shutdown')
+order(failed4, 'nv_linux_workqueue_shutdown() != 0', 'rm_shutdown_rm(sp);', 'later init rollback shuts RM down before queue shutdown')
+exit_start=core.find('void nvidia_exit_module(void)')
+exit_end=core.find('module_exit(nvidia_exit_module);', exit_start)
+exit_body=core[exit_start:exit_end]
+order(exit_body, 'nv_linux_workqueue_shutdown() != 0', 'nv_lock_destroy_locks(sp, nv);', 'module exit destroys locks before queue shutdown')
+order(exit_body, 'nv_linux_workqueue_shutdown() != 0', 'rm_shutdown_rm(sp);', 'module exit shuts RM down before queue shutdown')
+order(exit_body, 'nv_linux_workqueue_shutdown() != 0', 'NV_KMEM_CACHE_DESTROY(nvidia_stack_t_cache);', 'module exit destroys stack cache before queue shutdown')
 for name in ['counted drain was rejected', 'Work object and callback ABI', 'Flush-barrier and wait-predicate semantics', 'Single-thread serialization and scope', 'nvidia-modeset']:
     if name not in audit:
         raise SystemExit(f'{name} missing from audit')
@@ -130,9 +161,12 @@ C3
 }
 work=$(mktemp -d)
 trap "rm -rf '$work'; $cleanup" EXIT
+echo compile-probe-2
 compile_probe 2
+echo compile-probe-3
 compile_probe 3
 
+echo state-model
 cat > "$work/state-model.c" <<'CMODEL'
 #include <assert.h>
 typedef struct { int queued, running, requeueable; unsigned long long queued_sequence; } task_t;
@@ -154,6 +188,7 @@ CMODEL
 cc -Wall -Werror "$work/state-model.c" -o "$work/state-model"
 "$work/state-model"
 
+echo inventory
 rg -n 'NV_WORKQUEUE_SCHEDULE\(' "$prepared/nvidia" --glob '*.c' > "$work/core-workqueue-schedule.txt"
 grep -F 'nvidia/os-interface.c' "$work/core-workqueue-schedule.txt" >/dev/null
 grep -F 'nvidia/nv-gvi.c' "$work/core-workqueue-schedule.txt" >/dev/null
@@ -168,6 +203,7 @@ test "$(wc -l < "$work/core-workqueue-flush.txt")" -eq 4
 rg -n '^[[:space:]]*flush_scheduled_work\(\);' "$prepared/nvidia-modeset" >"$work/modeset-flush.txt"
 test "$(wc -l < "$work/modeset-flush.txt")" -eq 2
 
+echo repository-hygiene
 if git -C "$repo" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
     status=$(git -C "$repo" status --short)
     if printf '%s\n' "$status" |
