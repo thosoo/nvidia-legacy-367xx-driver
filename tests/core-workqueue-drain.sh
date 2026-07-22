@@ -76,6 +76,12 @@ for required in ['NV_WQ_UNINITIALIZED', 'NV_WQ_INITIALIZING', 'NV_WQ_RUNNING', '
     if required not in core:
         raise SystemExit(f'{required} missing')
 main=re.search(r'static int nv_linux_workqueue_main\([^)]*\)\s*\{(?P<body>.*?)\n\}', core, re.S).group('body')
+if 'wait_event_interruptible(nv_linux_workqueue_worker_wait' not in main:
+    raise SystemExit('worker idle wait must be interruptible')
+if 'wait_event(nv_linux_workqueue_worker_wait' in main:
+    raise SystemExit('worker idle wait must not use plain wait_event')
+if main.count('kthread_should_stop()') < 2 or 'if (wait_rc != 0)' not in main or 'continue;' not in main:
+    raise SystemExit('worker interruptible wait must recheck stop and retry interruptions')
 call2=main.find('task->handler(task);')
 call3=main.find('task->handler(task->handler_data);')
 cleanup=main.find('os_free_mem(owned_allocation);')
@@ -193,67 +199,12 @@ echo compile-probe-3
 compile_probe 3
 
 echo state-model
-cat > "$work/state-model.c" <<'CMODEL'
-#include <assert.h>
-typedef enum { NV_WQ_UNINITIALIZED, NV_WQ_INITIALIZING, NV_WQ_RUNNING, NV_WQ_DRAINING, NV_WQ_STOPPING, NV_WQ_STOPPED } state_t;
-typedef struct { state_t state; unsigned long long generation; int stop_calls; unsigned long long next_sequence; unsigned long long completed_sequence; int queued_items; int worker_running; } queue_t;
-typedef struct { int queued, running, requeueable; unsigned long long queued_sequence; } task_t;
-static int can_schedule(task_t *task, state_t state, int thread) { return thread && (state == NV_WQ_RUNNING || state == NV_WQ_DRAINING) && !task->queued && (task->requeueable || (task->queued_sequence == 0)); }
-static int begin_shutdown(queue_t *q, int self, unsigned long long *observed) {
-    if (self) return -11;
-    if (q->state == NV_WQ_UNINITIALIZED || q->state == NV_WQ_STOPPED) { q->state = NV_WQ_STOPPED; return 0; }
-    if (q->state == NV_WQ_INITIALIZING || q->state == NV_WQ_DRAINING || q->state == NV_WQ_STOPPING) { *observed = q->generation; return 1; }
-    q->state = NV_WQ_DRAINING; return 2;
-}
-static int waiter_done(queue_t *q, unsigned long long observed) { return q->generation != observed; }
-static void accept_work(queue_t *q) { assert(q->state == NV_WQ_RUNNING || q->state == NV_WQ_DRAINING); q->next_sequence++; q->queued_items++; }
-static void worker_dequeue(queue_t *q) { assert(q->queued_items > 0); q->queued_items--; q->worker_running = 1; }
-static void worker_complete(queue_t *q) { assert(q->worker_running); q->worker_running = 0; q->completed_sequence++; }
-static int stable_quiescent(queue_t *q) { return q->queued_items == 0 && q->completed_sequence == q->next_sequence; }
-static int owner_try_stop(queue_t *q) {
-    assert(q->state == NV_WQ_DRAINING);
-    if (!stable_quiescent(q)) return 0;
-    q->state = NV_WQ_STOPPING;
-    q->stop_calls++;
-    q->state = NV_WQ_STOPPED;
-    q->generation++;
-    return 1;
-}
-static int begin_init(queue_t *q) {
-    if (q->state == NV_WQ_INITIALIZING || q->state == NV_WQ_RUNNING || q->state == NV_WQ_DRAINING || q->state == NV_WQ_STOPPING) return -1;
-    q->state = NV_WQ_INITIALIZING; return 0;
-}
-static void finish_init(queue_t *q, int ok) { q->state = ok ? NV_WQ_RUNNING : NV_WQ_STOPPED; if (!ok) q->generation++; }
-int main(void) {
-    task_t dyn = {0,0,0,0};
-    assert(can_schedule(&dyn, NV_WQ_RUNNING, 1));
-    dyn.queued = 1; dyn.queued_sequence = 1; assert(!can_schedule(&dyn, NV_WQ_RUNNING, 1));
-    dyn.queued = 0; dyn.running = 1; assert(!can_schedule(&dyn, NV_WQ_RUNNING, 1));
-    dyn.running = 0; assert(!can_schedule(&dyn, NV_WQ_RUNNING, 1));
-    task_t stat = {0,0,1,0};
-    assert(can_schedule(&stat, NV_WQ_RUNNING, 1));
-    stat.queued = 1; stat.queued_sequence = 1; assert(!can_schedule(&stat, NV_WQ_RUNNING, 1));
-    stat.queued = 0; stat.running = 1; assert(can_schedule(&stat, NV_WQ_RUNNING, 1));
-    assert(can_schedule(&stat, NV_WQ_DRAINING, 1));
-    assert(!can_schedule(&stat, NV_WQ_STOPPING, 1));
-    stat.queued = 1; assert(!can_schedule(&stat, NV_WQ_RUNNING, 1));
-    queue_t q = { NV_WQ_RUNNING, 7, 0, 0, 0, 0, 0 }; unsigned long long seen = 0;
-    assert(begin_shutdown(&q, 0, &seen) == 2 && q.state == NV_WQ_DRAINING);
-    assert(begin_shutdown(&q, 0, &seen) == 1 && seen == 7 && q.state == NV_WQ_DRAINING);
-    accept_work(&q); worker_dequeue(&q); assert(q.queued_items == 0 && q.completed_sequence != q.next_sequence); assert(!owner_try_stop(&q));
-    accept_work(&q); worker_complete(&q); assert(!stable_quiescent(&q)); worker_dequeue(&q); worker_complete(&q); assert(stable_quiescent(&q));
-    assert(owner_try_stop(&q) && q.stop_calls == 1 && q.state == NV_WQ_STOPPED && q.generation == 8 && waiter_done(&q, seen));
-    assert(begin_shutdown(&q, 0, &seen) == 0 && q.stop_calls == 1);
-    q.state = NV_WQ_RUNNING; assert(begin_shutdown(&q, 1, &seen) == -11 && q.state == NV_WQ_RUNNING);
-    q.state = NV_WQ_INITIALIZING; q.generation = 11; assert(begin_shutdown(&q, 0, &seen) == 1 && seen == 11); finish_init(&q, 1); assert(q.state == NV_WQ_RUNNING && q.generation == 11);
-    q.state = NV_WQ_STOPPED; assert(begin_init(&q) == 0 && begin_init(&q) == -1); finish_init(&q, 0); assert(q.state == NV_WQ_STOPPED && q.generation == 12);
-    assert(begin_init(&q) == 0); finish_init(&q, 1); assert(q.state == NV_WQ_RUNNING && q.generation == 12);
-    q.state = NV_WQ_DRAINING; q.generation = 20; assert(begin_shutdown(&q, 0, &seen) == 1); q.state = NV_WQ_STOPPED; q.generation = 21; assert(waiter_done(&q, seen)); assert(begin_init(&q) == 0); finish_init(&q, 1); assert(q.state == NV_WQ_RUNNING);
-    return 0;
-}
-CMODEL
-cc -Wall -Werror "$work/state-model.c" -o "$work/state-model"
+cc -Wall -Werror "$repo/tests/core-workqueue-state-model.c" -o "$work/state-model"
 "$work/state-model"
+
+echo selftest-compile
+cc -DNV_WORKQUEUE_SELFTEST -Wall -Werror "$repo/tests/core-workqueue-selftest.c" -o "$work/core-workqueue-selftest"
+"$work/core-workqueue-selftest"
 
 echo inventory
 rg -n 'NV_WORKQUEUE_SCHEDULE\(' "$prepared/nvidia" --glob '*.c' > "$work/core-workqueue-schedule.txt"

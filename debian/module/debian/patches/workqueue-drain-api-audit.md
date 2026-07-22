@@ -24,7 +24,7 @@ task)`. The queue is initialized during core module initialization and stopped
 during failure rollback and module exit.
 
 The queue uses one spin lock for list, sequence, running, lifecycle state, and
-thread pointer state; one non-interruptible worker wait queue for accepted work;
+thread pointer state; one interruptible idle worker wait queue for accepted work;
 one flush wait queue for barrier completion; and one shutdown wait queue for
 concurrent shutdown serialization. A flush snapshots the latest accepted sequence and waits
 until the worker has invoked each callback through that sequence, the callback
@@ -101,7 +101,7 @@ after the second snapshot receive higher sequence numbers and do not delay that
 flush. Concurrent flushers are safe because each uses its own snapshots and the
 shared completed sequence advances in FIFO worker order.
 
-The worker uses `wait_event()` rather than `wait_event_interruptible()` because no signal-handling behavior is required for this kernel thread. The worker wait predicate also acquires the spin lock before checking list
+The worker uses `wait_event_interruptible()` for its idle sleep, matching the later NVIDIA kthread-queue rationale that an idle queue thread should not remain in uninterruptible sleep and be classified as a potential hung task. Unexpected interruptions are retried without consuming queue entries; `kthread_stop()` is rechecked immediately after wakeup so stop still terminates the worker. The worker wait predicate also acquires the spin lock before checking list
 emptiness. Enqueue publishes list and sequence state before dropping the lock and
 waking the worker wait queue, preventing lost wakeups with the wait-event
 predicate recheck.
@@ -165,9 +165,15 @@ responsibility as before.
 | `schedule_timeout`/scheduler wait internals | macro path only if emitted | macro path only if emitted | macro path only if emitted | final authority undefined-symbol audit |
 | `alloc_workqueue`, `alloc_ordered_workqueue`, `create_singlethread_workqueue`, `destroy_workqueue`, `flush_work`, `cancel_work_sync` | not used | not used | not used | prohibited/rejected |
 
-Exact Ubuntu 6.8, Bookworm, and Trixie undefined-symbol audits must be completed
-from built `nvidia.ko` artifacts and their exact `Module.symvers`; no completed
-Ubuntu 6.8 build result is claimed here.
+`tools/audit-module-symbols.sh` now performs the exact undefined-symbol versus `Module.symvers` check for each built module and fails on missing or GPL-only exports. The CI/build status should distinguish package MODPOST success from this stricter symbol audit:
+
+| target | compile/link/MODPOST | undefined-symbol audit | exact release status |
+|---|---|---|---|
+| Bookworm | confirmed by package CI on the reviewed parent; rerun required for each new head | tool added; report required from built artifacts | Debian `linux-headers-amd64` selected in package job |
+| Trixie | confirmed by package CI on the reviewed parent; rerun required for each new head | tool added; report required from built artifacts | Debian `linux-headers-amd64` selected in package job |
+| Ubuntu 24.04 GA 6.8 | new `ubuntu-6.8-module` CI job added; success required before claiming verification | new CI job runs `tools/audit-module-symbols.sh` after MODPOST | job rejects non-`6.8.*-generic` headers |
+
+No completed local Ubuntu 6.8 build result is claimed here.
 
 ## Remaining limitations
 

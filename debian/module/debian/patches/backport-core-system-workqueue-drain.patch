@@ -104,7 +104,7 @@ Forwarded: not-needed
  #define NV_WORKQUEUE_UNPACK_DATA(tq) (nv_work_t *)(tq)
 --- a/nvidia/nv.c
 +++ b/nvidia/nv.c
-@@ -55,6 +55,324 @@
+@@ -55,6 +55,345 @@
  static NvU32 num_nv_devices = 0;
  NvU32 num_probed_nv_devices = 0;
 
@@ -184,10 +184,25 @@ Forwarded: not-needed
 +    NvU64 complete_sequence;
 +    unsigned long flags;
 +
-+    while (!kthread_should_stop())
++    for (;;)
 +    {
-+        wait_event(nv_linux_workqueue_worker_wait,
++        int wait_rc;
++
++        wait_rc = wait_event_interruptible(nv_linux_workqueue_worker_wait,
 +            kthread_should_stop() || nv_linux_workqueue_has_work());
++
++        if (kthread_should_stop())
++            break;
++
++        if (wait_rc != 0)
++        {
++            /*
++             * Unexpected interruption of the idle kernel worker wait. Retry
++             * without consuming or losing queued work; the locked predicate is
++             * rechecked before sleeping again.
++             */
++            continue;
++        }
 +
 +        for (;;)
 +        {
@@ -400,6 +415,12 @@ Forwarded: not-needed
 +        WARN_ON_ONCE(nv_linux_workqueue_flush() != 0);
 +
 +        spin_lock_irqsave(&nv_linux_workqueue_lock, flags);
++        /*
++         * The FIFO can be empty while the single worker is executing an item
++         * already removed from the list. Sequence equality covers work still
++         * queued, dequeued callbacks, callback body execution, queue-owned
++         * cleanup, and completion that has not yet been published.
++         */
 +        if (list_empty(&nv_linux_workqueue_items) &&
 +            (nv_linux_workqueue_completed_sequence ==
 +             nv_linux_workqueue_next_sequence))

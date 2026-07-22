@@ -370,6 +370,19 @@ set +e
     else
         echo no > /work/logs/modpost-reached.txt
     fi
+    sed -n 's|.*-C /lib/modules/\([^/[:space:]]*\)/build.*|\1|p' /work/logs/module-kbuild-command.txt | head -n 1 > /work/logs/module-kernel-release.txt || true
+    test -s /work/logs/module-kernel-release.txt || echo unknown > /work/logs/module-kernel-release.txt
+    module_kernel=$(cat /work/logs/module-kernel-release.txt)
+    if grep -qx yes /work/logs/nvidia-ko-created.txt && grep -qx yes /work/logs/nvidia-modeset-ko-created.txt && \
+       grep -qx yes /work/logs/nvidia-drm-ko-created.txt && grep -qx yes /work/logs/nvidia-uvm-ko-created.txt && \
+       test "$module_kernel" != unknown; then
+        sh /work/binary-source/tools/audit-module-symbols.sh \
+            "$module_source" "$module_kernel" /work/logs/module-symbol-audit \
+            > /work/logs/module-symbol-audit.log 2>&1 || \
+            echo "module symbol audit failed" >> /work/logs/post-build-diagnostics-failures.txt
+    else
+        echo "symbol audit skipped" > /work/logs/module-symbol-audit.log
+    fi
     if grep -qx yes /work/logs/nvidia-ko-created.txt && grep -qx yes /work/logs/nvidia-modeset-ko-created.txt && \
        grep -qx yes /work/logs/nvidia-drm-ko-created.txt && grep -qx yes /work/logs/nvidia-uvm-ko-created.txt && \
        grep -qx yes /work/logs/modules-order-created.txt; then
@@ -497,5 +510,9 @@ set +e
 diagnostics_status=$?
 printf '%s\n' "$diagnostics_status" > /work/logs/post-build-diagnostics.exit
 set -e
+
+if [ "$binary_status" -eq 0 ] && grep -Eq 'module symbol audit failed|symbol audit skipped' /work/logs/post-build-diagnostics-failures.txt /work/logs/module-symbol-audit.log 2>/dev/null; then
+    exit 1
+fi
 
 exit "$binary_status"
