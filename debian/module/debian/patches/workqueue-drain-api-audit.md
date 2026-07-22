@@ -24,7 +24,7 @@ task)`. The queue is initialized during core module initialization and stopped
 during failure rollback and module exit.
 
 The queue uses one spin lock for list, sequence, running, stopping, and thread
-pointer state; one worker wait queue for accepted work; and one flush wait queue
+pointer state; one non-interruptible worker wait queue for accepted work; and one flush wait queue
 for barrier completion. A flush snapshots the latest accepted sequence and waits
 until the worker has invoked each callback through that sequence, the callback
 has returned, queue-owned cleanup has run, and only then the completed sequence
@@ -96,7 +96,7 @@ sequence numbers and do not delay an older flush. Concurrent flushers are safe
 because each uses its own snapshot and the shared completed sequence advances in
 FIFO worker order.
 
-The worker wait predicate also acquires the spin lock before checking list
+The worker uses `wait_event()` rather than `wait_event_interruptible()` because no signal-handling behavior is required for this kernel thread. The worker wait predicate also acquires the spin lock before checking list
 emptiness. Enqueue publishes list and sequence state before dropping the lock and
 waking the worker wait queue, preventing lost wakeups with the wait-event
 predicate recheck.
@@ -112,8 +112,7 @@ submissions are rejected, wakes the worker wait queue, flushes all accepted work
 then calls `kthread_stop()` and clears the thread pointer under the lock after
 thread exit.
 
-A flush from the queue thread is diagnosed and returns instead of silently
-deadlocking the single worker.
+A flush from the queue thread is diagnosed and returns `-EDEADLK` instead of silently deadlocking the single worker; `os_flush_work_queue()` maps that to `NV_ERR_ILLEGAL_ACTION`, while direct open-source flush call sites use the diagnostic wrapper macro.
 
 ## Single-thread serialization and scope
 

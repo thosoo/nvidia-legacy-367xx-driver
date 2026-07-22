@@ -13,7 +13,7 @@ diff -Naur '--exclude=*.orig' a/common/inc/nv-linux.h b/common/inc/nv-linux.h
  #include <linux/string.h>           /* strchr(), strpbrk()              */
 
  #include <linux/ctype.h>            /* isspace(), etc                   */
-@@ -1732,32 +1733,67 @@
+@@ -1732,32 +1733,69 @@
  #endif /* defined(NV_SG_ALLOC_TABLE_FROM_PAGES_PRESENT) &&
            !defined(NV_DOM0_KERNEL_PRESENT) */
 
@@ -50,10 +50,12 @@ diff -Naur '--exclude=*.orig' a/common/inc/nv-linux.h b/common/inc/nv-linux.h
 +int nv_linux_workqueue_init(void);
 +void nv_linux_workqueue_shutdown(void);
 +int nv_linux_workqueue_schedule(nv_task_t *task);
-+void nv_linux_workqueue_flush(void);
++int nv_linux_workqueue_flush(void);
++void nv_linux_workqueue_flush_assert(const char *file, int line);
 +
 +#define NV_WORKQUEUE_SCHEDULE(_work) nv_linux_workqueue_schedule(_work)
-+#define NV_WORKQUEUE_FLUSH() nv_linux_workqueue_flush()
++#define NV_WORKQUEUE_FLUSH_STATUS() nv_linux_workqueue_flush()
++#define NV_WORKQUEUE_FLUSH() nv_linux_workqueue_flush_assert(__FILE__, __LINE__)
  #if (NV_INIT_WORK_ARGUMENT_COUNT == 2)
 -#define NV_WORKQUEUE_INIT(tq,handler,data)             \
 +#define NV_WORKQUEUE_INIT(_tq,_handler,_data)          \
@@ -96,7 +98,7 @@ diff -Naur '--exclude=*.orig' a/common/inc/nv-linux.h b/common/inc/nv-linux.h
 diff -Naur '--exclude=*.orig' a/nvidia/nv.c b/nvidia/nv.c
 --- a/nvidia/nv.c	2026-07-22 03:47:59.791809193 +0000
 +++ b/nvidia/nv.c	2026-07-22 03:48:01.087809193 +0000
-@@ -55,6 +55,197 @@
+@@ -55,6 +55,211 @@
  static NvU32 num_nv_devices = 0;
  NvU32 num_probed_nv_devices = 0;
 
@@ -142,7 +144,7 @@ diff -Naur '--exclude=*.orig' a/nvidia/nv.c b/nvidia/nv.c
 +
 +    while (!kthread_should_stop())
 +    {
-+        wait_event_interruptible(nv_linux_workqueue_worker_wait,
++        wait_event(nv_linux_workqueue_worker_wait,
 +            kthread_should_stop() || nv_linux_workqueue_has_work());
 +
 +        for (;;)
@@ -248,7 +250,7 @@ diff -Naur '--exclude=*.orig' a/nvidia/nv.c b/nvidia/nv.c
 +    return accepted;
 +}
 +
-+void nv_linux_workqueue_flush(void)
++int nv_linux_workqueue_flush(void)
 +{
 +    NvU64 barrier;
 +    unsigned long flags;
@@ -259,13 +261,27 @@ diff -Naur '--exclude=*.orig' a/nvidia/nv.c b/nvidia/nv.c
 +        spin_unlock_irqrestore(&nv_linux_workqueue_lock, flags);
 +        nv_printf(NV_DBG_ERRORS,
 +                  "NVRM: nv_linux_workqueue_flush: called from worker thread\n");
-+        return;
++        return -EDEADLK;
 +    }
 +    barrier = nv_linux_workqueue_next_sequence;
 +    spin_unlock_irqrestore(&nv_linux_workqueue_lock, flags);
 +
 +    wait_event(nv_linux_workqueue_flush_wait,
 +        nv_linux_workqueue_barrier_done(barrier));
++
++    return 0;
++}
++
++void nv_linux_workqueue_flush_assert(const char *file, int line)
++{
++    int rc = nv_linux_workqueue_flush();
++
++    if (rc != 0)
++    {
++        nv_printf(NV_DBG_ERRORS,
++                  "NVRM: NV_WORKQUEUE_FLUSH failed at %s:%d: %d\n",
++                  file, line, rc);
++    }
 +}
 +
 +void nv_linux_workqueue_shutdown(void)
@@ -282,7 +298,7 @@ diff -Naur '--exclude=*.orig' a/nvidia/nv.c b/nvidia/nv.c
 +
 +    if (thread != NULL)
 +    {
-+        nv_linux_workqueue_flush();
++        (void)nv_linux_workqueue_flush();
 +        kthread_stop(thread);
 +    }
 +
@@ -334,6 +350,23 @@ diff -Naur '--exclude=*.orig' a/nvidia/nv.c b/nvidia/nv.c
  #if defined(NVCPU_X86_64) && defined(CONFIG_IA32_EMULATION) && \
    !defined(NV_FILE_OPERATIONS_HAS_COMPAT_IOCTL)
      rm_unregister_compatible_ioctls(sp);
+diff -Naur '--exclude=*.orig' a/common/inc/nv-proto.h b/common/inc/nv-proto.h
+--- a/common/inc/nv-proto.h	2026-07-22 00:00:00.000000000 +0000
++++ b/common/inc/nv-proto.h	2026-07-22 00:00:00.000000000 +0000
+@@ -23,12 +23,8 @@
+ irqreturn_t nv_gvi_kern_isr             (int, void *);
+ #endif
+
+-#if (NV_INIT_WORK_ARGUMENT_COUNT == 3)
+-void        nv_gvi_kern_bh              (void *);
+-#else
+-void        nv_gvi_kern_bh              (struct work_struct *);
+-#endif
++void        nv_gvi_kern_bh              (NV_WORKQUEUE_DATA_T *);
+
+ #if defined(NV_PM_SUPPORT_DEVICE_DRIVER_MODEL)
+ int         nv_gvi_kern_suspend         (struct pci_dev *, pm_message_t);
+
 diff -Naur '--exclude=*.orig' a/nvidia/os-interface.c b/nvidia/os-interface.c
 --- a/nvidia/os-interface.c	2026-07-22 03:47:59.815809193 +0000
 +++ b/nvidia/os-interface.c	2026-07-22 03:48:01.087809193 +0000
@@ -346,7 +379,7 @@ diff -Naur '--exclude=*.orig' a/nvidia/os-interface.c b/nvidia/os-interface.c
      nv_kmem_cache_free_stack(sp);
  }
 
-@@ -1070,7 +1068,12 @@
+@@ -1070,8 +1068,13 @@
 
      NV_WORKQUEUE_INIT(&work->task, os_execute_work_item,
                        (void *)work);
@@ -360,3 +393,14 @@ diff -Naur '--exclude=*.orig' a/nvidia/os-interface.c b/nvidia/os-interface.c
 
      return NV_OK;
  }
+
+@@ -1080,7 +1083,7 @@
+ {
+     if (NV_MAY_SLEEP())
+     {
+-        NV_WORKQUEUE_FLUSH();
+-        return NV_OK;
++        return (NV_WORKQUEUE_FLUSH_STATUS() == 0) ?
++            NV_OK : NV_ERR_ILLEGAL_ACTION;
+     }
+     else

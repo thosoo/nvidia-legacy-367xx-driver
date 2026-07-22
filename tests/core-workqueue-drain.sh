@@ -61,7 +61,7 @@ import pathlib, re, sys
 root=pathlib.Path(sys.argv[1]); audit=pathlib.Path(sys.argv[2]).read_text()
 header=(root/'common/inc/nv-linux.h').read_text(); core=(root/'nvidia/nv.c').read_text()
 osi=(root/'nvidia/os-interface.c').read_text(); gvi=(root/'nvidia/nv-gvi.c').read_text()
-for text in ['typedef struct nv_task_s nv_task_t', 'nv_task_t task;', 'container_of((tq), nv_work_t, task)', 'handler_data', 'owned_allocation']:
+for text in ['typedef struct nv_task_s nv_task_t', 'nv_task_t task;', 'container_of((tq), nv_work_t, task)', 'handler_data', 'owned_allocation', 'NV_WORKQUEUE_FLUSH_STATUS']:
     if text not in header:
         raise SystemExit(f'missing work-object layout text: {text}')
 if re.search(r'#define NV_WORKQUEUE_INIT\([^)]*\bhandler\b[^)]*\)', header):
@@ -79,12 +79,14 @@ if min(call2, call3, cleanup, complete, wake) < 0 or not (call2 < cleanup < comp
     raise SystemExit('callback, cleanup, completion, wake ordering is wrong')
 if re.search(r'os_free_mem\(owned_allocation\);(?:(?!complete_sequence).)*task->', main, re.S):
     raise SystemExit('task may be dereferenced after freeing owned allocation')
+if 'NV_WORKQUEUE_FLUSH_STATUS() == 0' not in osi or 'NV_ERR_ILLEGAL_ACTION' not in osi:
+    raise SystemExit('os_flush_work_queue does not propagate worker flush failure')
 if 'work->task.owned_allocation = (void *)work;' not in osi or 'NV_ERR_INVALID_STATE' not in osi:
     raise SystemExit('dynamic ownership/reject path missing')
 if 'os_free_mem((void *)work);' in re.search(r'static void os_execute_work_item\([^)]*\)\s*\{(?P<body>.*?)\n\}', osi, re.S).group('body'):
     raise SystemExit('dynamic callback still frees wrapper')
-flush=re.search(r'void nv_linux_workqueue_flush\([^)]*\)\s*\{(?P<body>.*?)\n\}', core, re.S).group('body')
-if 'current == nv_linux_workqueue_thread' not in flush or 'nv_linux_workqueue_barrier_done(barrier)' not in flush:
+flush=re.search(r'int nv_linux_workqueue_flush\([^)]*\)\s*\{(?P<body>.*?)\n\}', core, re.S).group('body')
+if 'current == nv_linux_workqueue_thread' not in flush or 'return -EDEADLK;' not in flush or 'nv_linux_workqueue_barrier_done(barrier)' not in flush:
     raise SystemExit('flush lacks worker diagnostic or synchronized barrier predicate')
 for name in ['counted drain was rejected', 'Work object and callback ABI', 'Flush-barrier and wait-predicate semantics', 'Single-thread serialization and scope', 'nvidia-modeset']:
     if name not in audit:
@@ -128,7 +130,7 @@ grep -F 'nvidia/os-interface.c' "$work/core-workqueue-schedule.txt" >/dev/null
 grep -F 'nvidia/nv-gvi.c' "$work/core-workqueue-schedule.txt" >/dev/null
 test "$(wc -l < "$work/core-workqueue-schedule.txt")" -eq 2
 
-rg -n 'NV_WORKQUEUE_FLUSH\(' "$prepared/nvidia" --glob '*.c' > "$work/core-workqueue-flush.txt"
+rg -n 'NV_WORKQUEUE_FLUSH(_STATUS)?\(' "$prepared/nvidia" --glob '*.c' > "$work/core-workqueue-flush.txt"
 grep -F 'nvidia/os-interface.c' "$work/core-workqueue-flush.txt" >/dev/null
 grep -F 'nvidia/nv.c' "$work/core-workqueue-flush.txt" >/dev/null
 grep -F 'nvidia/nv-gvi.c' "$work/core-workqueue-flush.txt" >/dev/null
