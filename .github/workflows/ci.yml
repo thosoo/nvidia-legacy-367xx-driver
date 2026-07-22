@@ -4,24 +4,51 @@ jobs:
   static:
     name: static
     runs-on: ubuntu-latest
-    container: debian:trixie
     steps:
       - uses: actions/checkout@v4
-      - run: apt-get update && apt-get install -y --no-install-recommends ripgrep make perl dpkg-dev debhelper dh-dkms quilt xz-utils ca-certificates git
-      - run: tests/no-390xx-leaks.sh
-      - run: tests/amd64-only.sh
-      - run: tests/no-proprietary-artifacts.sh
-      - run: tests/generated-control-drift.sh
-      - run: tests/license-367xx.sh
-      - run: tests/supported-pci-ids.sh
-      - run: tests/module-reject-collector.sh
-      - run: tests/target-series-bookworm-trixie.sh
-      - run: tests/kbuild-module-directory.sh
-      - run: tests/kernel-standard-headers.sh
-      - run: tests/kmap-types-header.sh
-      - run: tests/linux-ioctl32-compat.sh
-      - run: tests/post-build-diagnostics-status.sh
-      - run: test -z "$(git status --porcelain)"
+      - name: Verify checkout
+        run: |
+          git rev-parse --is-inside-work-tree
+          test -d .git
+      - name: Run static checks in Trixie
+        run: |
+          docker run --rm \
+            -v "$PWD:/repo:rw" \
+            -w /repo \
+            debian:trixie \
+            sh -euxc '
+              apt-get update
+              apt-get install -y --no-install-recommends \
+                git curl python3 build-essential ripgrep make perl \
+                dpkg-dev debhelper dh-dkms quilt xz-utils ca-certificates shellcheck
+
+              git config --global --add safe.directory /repo
+
+              tests/no-390xx-leaks.sh
+              tests/amd64-only.sh
+              tests/no-proprietary-artifacts.sh
+              tests/generated-control-drift.sh
+              tests/license-367xx.sh
+              tests/supported-pci-ids.sh
+              tests/module-reject-collector.sh
+              tests/target-series-bookworm-trixie.sh
+              tests/kbuild-module-directory.sh
+              tests/kernel-standard-headers.sh
+              tests/kmap-types-header.sh
+              tests/linux-ioctl32-compat.sh
+              tests/post-build-diagnostics-status.sh
+              tools/check-github-actions.sh
+              tests/ci-workflow-static.sh
+              tests/runtime-collector-static.sh
+              shellcheck tools/build-ubuntu-6.8-module.sh
+              shellcheck tools/audit-module-symbols.sh
+              shellcheck tools/collect-workqueue-runtime.sh
+              shellcheck tools/build-in-debian.sh
+              tests/core-workqueue-drain.sh
+              tests/module-symbol-audit.sh
+            '
+      - name: Verify clean checkout
+        run: test -z "$(git status --porcelain)"
   bookworm-package:
     name: bookworm-package
     runs-on: ubuntu-latest
@@ -36,6 +63,7 @@ jobs:
             debian:bookworm \
             sh /repo/tools/build-in-debian.sh bookworm /repo /out
       - name: Guard Bookworm diagnostic artifact contents
+        id: artifact_guard
         if: always()
         run: tests/no-uploaded-proprietary-artifacts.sh ci-results/bookworm/logs
       - name: Check Bookworm exported diagnostics are readable
@@ -48,7 +76,7 @@ jobs:
             exit 1
           fi
       - name: Upload Bookworm diagnostics
-        if: always()
+        if: ${{ always() && steps.artifact_guard.outcome == 'success' }}
         uses: actions/upload-artifact@v4
         with:
           name: build-logs-bookworm
@@ -68,6 +96,7 @@ jobs:
             debian:trixie \
             sh /repo/tools/build-in-debian.sh trixie /repo /out
       - name: Guard Trixie diagnostic artifact contents
+        id: artifact_guard
         if: always()
         run: tests/no-uploaded-proprietary-artifacts.sh ci-results/trixie/logs
       - name: Check Trixie exported diagnostics are readable
@@ -80,7 +109,7 @@ jobs:
             exit 1
           fi
       - name: Upload Trixie diagnostics
-        if: always()
+        if: ${{ always() && steps.artifact_guard.outcome == 'success' }}
         uses: actions/upload-artifact@v4
         with:
           name: build-logs-trixie
