@@ -13,7 +13,7 @@ diff -Naur '--exclude=*.orig' a/common/inc/nv-linux.h b/common/inc/nv-linux.h
  #include <linux/string.h>           /* strchr(), strpbrk()              */
 
  #include <linux/ctype.h>            /* isspace(), etc                   */
-@@ -1732,32 +1733,69 @@
+@@ -1732,32 +1733,72 @@
  #endif /* defined(NV_SG_ALLOC_TABLE_FROM_PAGES_PRESENT) &&
            !defined(NV_DOM0_KERNEL_PRESENT) */
 
@@ -37,6 +37,7 @@ diff -Naur '--exclude=*.orig' a/common/inc/nv-linux.h b/common/inc/nv-linux.h
 +    NvU64 running_sequence;
 +    NvBool queued;
 +    NvBool running;
++    NvBool requeueable;
 +};
 
  typedef struct nv_work_s {
@@ -51,11 +52,11 @@ diff -Naur '--exclude=*.orig' a/common/inc/nv-linux.h b/common/inc/nv-linux.h
 +void nv_linux_workqueue_shutdown(void);
 +int nv_linux_workqueue_schedule(nv_task_t *task);
 +int nv_linux_workqueue_flush(void);
-+void nv_linux_workqueue_flush_assert(const char *file, int line);
++void nv_linux_workqueue_flush_required(const char *file, int line);
 +
 +#define NV_WORKQUEUE_SCHEDULE(_work) nv_linux_workqueue_schedule(_work)
 +#define NV_WORKQUEUE_FLUSH_STATUS() nv_linux_workqueue_flush()
-+#define NV_WORKQUEUE_FLUSH() nv_linux_workqueue_flush_assert(__FILE__, __LINE__)
++#define NV_WORKQUEUE_FLUSH() nv_linux_workqueue_flush_required(__FILE__, __LINE__)
  #if (NV_INIT_WORK_ARGUMENT_COUNT == 2)
 -#define NV_WORKQUEUE_INIT(tq,handler,data)             \
 +#define NV_WORKQUEUE_INIT(_tq,_handler,_data)          \
@@ -72,6 +73,7 @@ diff -Naur '--exclude=*.orig' a/common/inc/nv-linux.h b/common/inc/nv-linux.h
 +        __tq->running_sequence = 0;                    \
 +        __tq->queued = NV_FALSE;                       \
 +        __tq->running = NV_FALSE;                      \
++        __tq->requeueable = NV_TRUE;                    \
      }
  #define NV_WORKQUEUE_DATA_T nv_task_t
  #define NV_WORKQUEUE_UNPACK_DATA(tq)                   \
@@ -92,13 +94,14 @@ diff -Naur '--exclude=*.orig' a/common/inc/nv-linux.h b/common/inc/nv-linux.h
 +        __tq->running_sequence = 0;                    \
 +        __tq->queued = NV_FALSE;                       \
 +        __tq->running = NV_FALSE;                      \
++        __tq->requeueable = NV_TRUE;                    \
      }
  #define NV_WORKQUEUE_DATA_T void
  #define NV_WORKQUEUE_UNPACK_DATA(tq) (nv_work_t *)(tq)
 diff -Naur '--exclude=*.orig' a/nvidia/nv.c b/nvidia/nv.c
 --- a/nvidia/nv.c	2026-07-22 03:47:59.791809193 +0000
 +++ b/nvidia/nv.c	2026-07-22 03:48:01.087809193 +0000
-@@ -55,6 +55,211 @@
+@@ -55,6 +55,217 @@
  static NvU32 num_nv_devices = 0;
  NvU32 num_probed_nv_devices = 0;
 
@@ -235,7 +238,7 @@ diff -Naur '--exclude=*.orig' a/nvidia/nv.c b/nvidia/nv.c
 +
 +    spin_lock_irqsave(&nv_linux_workqueue_lock, flags);
 +    if ((nv_linux_workqueue_thread != NULL) && !nv_linux_workqueue_stopping &&
-+        !task->queued)
++        !task->queued && (task->requeueable || (task->queued_sequence == 0)))
 +    {
 +        task->queued_sequence = ++nv_linux_workqueue_next_sequence;
 +        list_add_tail(&task->entry, &nv_linux_workqueue_items);
@@ -272,7 +275,7 @@ diff -Naur '--exclude=*.orig' a/nvidia/nv.c b/nvidia/nv.c
 +    return 0;
 +}
 +
-+void nv_linux_workqueue_flush_assert(const char *file, int line)
++void nv_linux_workqueue_flush_required(const char *file, int line)
 +{
 +    int rc = nv_linux_workqueue_flush();
 +
@@ -298,6 +301,12 @@ diff -Naur '--exclude=*.orig' a/nvidia/nv.c b/nvidia/nv.c
 +
 +    if (thread != NULL)
 +    {
++        if (current == thread)
++        {
++            nv_printf(NV_DBG_ERRORS,
++                      "NVRM: nv_linux_workqueue_shutdown: called from worker thread\n");
++            return;
++        }
 +        (void)nv_linux_workqueue_flush();
 +        kthread_stop(thread);
 +    }
@@ -379,11 +388,12 @@ diff -Naur '--exclude=*.orig' a/nvidia/os-interface.c b/nvidia/os-interface.c
      nv_kmem_cache_free_stack(sp);
  }
 
-@@ -1070,8 +1068,13 @@
+@@ -1070,8 +1068,14 @@
 
      NV_WORKQUEUE_INIT(&work->task, os_execute_work_item,
                        (void *)work);
 -    NV_WORKQUEUE_SCHEDULE(&work->task);
++    work->task.requeueable = NV_FALSE;
 +    work->task.owned_allocation = (void *)work;
 +    if (!NV_WORKQUEUE_SCHEDULE(&work->task))
 +    {
@@ -394,7 +404,7 @@ diff -Naur '--exclude=*.orig' a/nvidia/os-interface.c b/nvidia/os-interface.c
      return NV_OK;
  }
 
-@@ -1080,7 +1083,7 @@
+@@ -1080,8 +1083,8 @@
  {
      if (NV_MAY_SLEEP())
      {
@@ -404,3 +414,49 @@ diff -Naur '--exclude=*.orig' a/nvidia/os-interface.c b/nvidia/os-interface.c
 +            NV_OK : NV_ERR_ILLEGAL_ACTION;
      }
      else
+
+diff -Naur '--exclude=*.orig' a/nvidia/nv.c b/nvidia/nv.c
+--- a/nvidia/nv.c	2026-07-22 04:30:00.000000000 +0000
++++ b/nvidia/nv.c	2026-07-22 04:30:00.000000000 +0000
+@@ -1880,6 +1880,10 @@
+     if (NV_IS_GVI_DEVICE(nv))
+     {
+         rm_shutdown_gvi_device(sp, nv);
+-        NV_WORKQUEUE_FLUSH();
++        if (NV_WORKQUEUE_FLUSH_STATUS() != 0)
++        {
++            nv_printf(NV_DBG_ERRORS, "NVRM: GVI workqueue flush failed; aborting device stop\n");
++            return;
++        }
+         free_irq(nv->interrupt_line, (void *)nvl);
+     }
+@@ -3607,7 +3611,11 @@
+
+     if (NV_IS_GVI_DEVICE(nv))
+     {
+-        NV_WORKQUEUE_FLUSH();
++        if (NV_WORKQUEUE_FLUSH_STATUS() != 0)
++        {
++            nv_printf(NV_DBG_ERRORS, "NVRM: GVI workqueue flush failed; aborting device removal\n");
++            return;
++        }
+         rm_gvi_detach_device(sp, nv);
+         rm_gvi_free_private_state(sp, nv);
+     }
+diff -Naur '--exclude=*.orig' a/nvidia/nv-gvi.c b/nvidia/nv-gvi.c
+--- a/nvidia/nv-gvi.c	2026-07-22 04:30:00.000000000 +0000
++++ b/nvidia/nv-gvi.c	2026-07-22 04:30:00.000000000 +0000
+@@ -87,7 +87,12 @@
+
+     nv->flags |= NV_FLAG_GVI_IN_SUSPEND;
+
+-    NV_WORKQUEUE_FLUSH();
++    status = NV_WORKQUEUE_FLUSH_STATUS();
++    if (status != 0)
++    {
++        nv->flags &= ~NV_FLAG_GVI_IN_SUSPEND;
++        goto failed;
++    }
+
+     status = rm_gvi_suspend(sp, nv);
+     if (status != 0)

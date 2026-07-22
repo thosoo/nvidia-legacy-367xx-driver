@@ -59,17 +59,15 @@ For `NV_INIT_WORK_ARGUMENT_COUNT == 3`, the worker invokes
 ## Scheduling semantics
 
 `NV_WORKQUEUE_INIT()` initializes the task list node, callback, stored callback
-data, optional owned-allocation pointer, queued/running sequence fields, and
-queued/running flags. `NV_WORKQUEUE_SCHEDULE()` rejects submissions after
-shutdown starts. Otherwise, it accepts an item only if it is not already queued,
-assigns the next queued sequence, appends it to the FIFO under the spin lock, and
+data, optional owned-allocation pointer, queued/running sequence fields, queued/running flags, and a `requeueable` flag. `NV_WORKQUEUE_SCHEDULE()` rejects submissions after
+shutdown starts. Otherwise, it accepts an item only if it is not already queued and either is requeueable or has never been accepted before, assigns the next queued sequence, appends it to the FIFO under the spin lock, and
 wakes the worker wait queue after publishing the list update. A static item
 submitted while queued is coalesced. A static item submitted while its callback
 is running and not already queued is accepted as a later FIFO item. The worker
 copies `queued_sequence` to a separate `running_sequence` when dequeuing so a
 requeue of the same static object cannot overwrite the sequence being completed.
 
-Dynamic `os_queue_work_item()` wrappers store the exact enclosing allocation in
+Dynamic `os_queue_work_item()` wrappers set `requeueable` to false and store the exact enclosing allocation in
 `task.owned_allocation` before scheduling. If shutdown rejects submission, the
 wrapper is freed immediately and `NV_ERR_INVALID_STATE` is returned.
 
@@ -110,9 +108,9 @@ calls shutdown after RM shutdown and before compatibility ioctl unregister and
 stack-cache teardown. Shutdown first sets `stopping` under the lock so new
 submissions are rejected, wakes the worker wait queue, flushes all accepted work,
 then calls `kthread_stop()` and clears the thread pointer under the lock after
-thread exit.
+thread exit. Shutdown from the worker thread is diagnosed and returns instead of self-stopping.
 
-A flush from the queue thread is diagnosed and returns `-EDEADLK` instead of silently deadlocking the single worker; `os_flush_work_queue()` maps that to `NV_ERR_ILLEGAL_ACTION`, while direct open-source flush call sites use the diagnostic wrapper macro.
+A flush from the queue thread is diagnosed and returns `-EDEADLK` instead of silently deadlocking the single worker. `os_flush_work_queue()` maps that to `NV_ERR_ILLEGAL_ACTION`. Direct GVI teardown/removal/suspend sites call the status-returning flush and fail closed: void teardown paths return before freeing IRQ/GVI state, and suspend returns the error path.
 
 ## Single-thread serialization and scope
 
@@ -140,10 +138,10 @@ responsibility as before.
 
 | symbol/API | Bookworm 6.1 | Ubuntu 6.8.0-136 | Trixie 6.12 | classification |
 |---|---|---|---|---|
-| `kthread_create_on_node` | requires exact Module.symvers confirmation | requires exact target Module.symvers confirmation | requires exact Module.symvers confirmation | intended `EXPORT_SYMBOL`, final authority MODPOST |
-| `kthread_stop` | requires exact Module.symvers confirmation | requires exact target Module.symvers confirmation | requires exact Module.symvers confirmation | intended `EXPORT_SYMBOL`, final authority MODPOST |
-| `wake_up_process` | requires exact Module.symvers confirmation | requires exact target Module.symvers confirmation | requires exact Module.symvers confirmation | used to start the new kthread, final authority MODPOST |
-| `__wake_up` via wait/wake macros | requires exact Module.symvers confirmation | requires exact target Module.symvers confirmation | requires exact Module.symvers confirmation | final authority MODPOST |
+| `kthread_create_on_node` | confirmed by package MODPOST | requires exact target Module.symvers confirmation | confirmed by package MODPOST | intended `EXPORT_SYMBOL`, final authority MODPOST |
+| `kthread_stop` | confirmed by package MODPOST | requires exact target Module.symvers confirmation | confirmed by package MODPOST | intended `EXPORT_SYMBOL`, final authority MODPOST |
+| `wake_up_process` | confirmed by package MODPOST | requires exact target Module.symvers confirmation | confirmed by package MODPOST | used to start the new kthread, final authority MODPOST |
+| `__wake_up` via wait/wake macros | confirmed by package MODPOST | requires exact target Module.symvers confirmation | confirmed by package MODPOST | final authority MODPOST |
 | `schedule_timeout`/scheduler wait internals | macro path only if emitted | macro path only if emitted | macro path only if emitted | final authority undefined-symbol audit |
 | `alloc_workqueue`, `alloc_ordered_workqueue`, `create_singlethread_workqueue`, `destroy_workqueue`, `flush_work`, `cancel_work_sync` | not used | not used | not used | prohibited/rejected |
 

@@ -7,7 +7,7 @@ jobs:
     container: debian:trixie
     steps:
       - uses: actions/checkout@v4
-      - run: apt-get update && apt-get install -y --no-install-recommends ripgrep make perl dpkg-dev debhelper dh-dkms quilt xz-utils ca-certificates git
+      - run: apt-get update && apt-get install -y --no-install-recommends ripgrep make perl dpkg-dev debhelper dh-dkms quilt xz-utils ca-certificates git curl build-essential
       - run: tests/no-390xx-leaks.sh
       - run: tests/amd64-only.sh
       - run: tests/no-proprietary-artifacts.sh

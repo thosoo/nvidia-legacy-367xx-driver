@@ -61,7 +61,7 @@ import pathlib, re, sys
 root=pathlib.Path(sys.argv[1]); audit=pathlib.Path(sys.argv[2]).read_text()
 header=(root/'common/inc/nv-linux.h').read_text(); core=(root/'nvidia/nv.c').read_text()
 osi=(root/'nvidia/os-interface.c').read_text(); gvi=(root/'nvidia/nv-gvi.c').read_text()
-for text in ['typedef struct nv_task_s nv_task_t', 'nv_task_t task;', 'container_of((tq), nv_work_t, task)', 'handler_data', 'owned_allocation', 'NV_WORKQUEUE_FLUSH_STATUS']:
+for text in ['typedef struct nv_task_s nv_task_t', 'nv_task_t task;', 'container_of((tq), nv_work_t, task)', 'handler_data', 'owned_allocation', 'requeueable', 'NV_WORKQUEUE_FLUSH_STATUS']:
     if text not in header:
         raise SystemExit(f'missing work-object layout text: {text}')
 if re.search(r'#define NV_WORKQUEUE_INIT\([^)]*\bhandler\b[^)]*\)', header):
@@ -81,13 +81,20 @@ if re.search(r'os_free_mem\(owned_allocation\);(?:(?!complete_sequence).)*task->
     raise SystemExit('task may be dereferenced after freeing owned allocation')
 if 'NV_WORKQUEUE_FLUSH_STATUS() == 0' not in osi or 'NV_ERR_ILLEGAL_ACTION' not in osi:
     raise SystemExit('os_flush_work_queue does not propagate worker flush failure')
-if 'work->task.owned_allocation = (void *)work;' not in osi or 'NV_ERR_INVALID_STATE' not in osi:
+if 'work->task.requeueable = NV_FALSE;' not in osi or 'work->task.owned_allocation = (void *)work;' not in osi or 'NV_ERR_INVALID_STATE' not in osi:
     raise SystemExit('dynamic ownership/reject path missing')
 if 'os_free_mem((void *)work);' in re.search(r'static void os_execute_work_item\([^)]*\)\s*\{(?P<body>.*?)\n\}', osi, re.S).group('body'):
     raise SystemExit('dynamic callback still frees wrapper')
 flush=re.search(r'int nv_linux_workqueue_flush\([^)]*\)\s*\{(?P<body>.*?)\n\}', core, re.S).group('body')
 if 'current == nv_linux_workqueue_thread' not in flush or 'return -EDEADLK;' not in flush or 'nv_linux_workqueue_barrier_done(barrier)' not in flush:
     raise SystemExit('flush lacks worker diagnostic or synchronized barrier predicate')
+
+schedule=re.search(r'int nv_linux_workqueue_schedule\([^)]*\)\s*\{(?P<body>.*?)\n\}', core, re.S).group('body')
+if 'task->requeueable || (task->queued_sequence == 0)' not in schedule:
+    raise SystemExit('dynamic one-shot/static requeue schedule rule missing')
+for needle in ['NV_WORKQUEUE_FLUSH_STATUS();', 'return;', 'return status;']:
+    if needle not in core + gvi:
+        raise SystemExit(f'direct flush call-site handling missing {needle}')
 for name in ['counted drain was rejected', 'Work object and callback ABI', 'Flush-barrier and wait-predicate semantics', 'Single-thread serialization and scope', 'nvidia-modeset']:
     if name not in audit:
         raise SystemExit(f'{name} missing from audit')
@@ -98,6 +105,7 @@ compile_probe() {
     cat > "$work/probe-$mode.c" <<'CHEAD'
 #include <stddef.h>
 #define NV_FALSE 0
+#define NV_TRUE 1
 typedef unsigned long long NvU64;
 typedef int NvBool;
 struct list_head { struct list_head *next, *prev; };
@@ -125,6 +133,27 @@ trap "rm -rf '$work'; $cleanup" EXIT
 compile_probe 2
 compile_probe 3
 
+cat > "$work/state-model.c" <<'CMODEL'
+#include <assert.h>
+typedef struct { int queued, running, requeueable; unsigned long long queued_sequence; } task_t;
+static int can_schedule(task_t *task) { return !task->queued && (task->requeueable || (task->queued_sequence == 0)); }
+int main(void) {
+    task_t dyn = {0,0,0,0};
+    assert(can_schedule(&dyn));
+    dyn.queued = 1; dyn.queued_sequence = 1; assert(!can_schedule(&dyn));
+    dyn.queued = 0; dyn.running = 1; assert(!can_schedule(&dyn));
+    dyn.running = 0; assert(!can_schedule(&dyn));
+    task_t stat = {0,0,1,0};
+    assert(can_schedule(&stat));
+    stat.queued = 1; stat.queued_sequence = 1; assert(!can_schedule(&stat));
+    stat.queued = 0; stat.running = 1; assert(can_schedule(&stat));
+    stat.queued = 1; assert(!can_schedule(&stat));
+    return 0;
+}
+CMODEL
+cc -Wall -Werror "$work/state-model.c" -o "$work/state-model"
+"$work/state-model"
+
 rg -n 'NV_WORKQUEUE_SCHEDULE\(' "$prepared/nvidia" --glob '*.c' > "$work/core-workqueue-schedule.txt"
 grep -F 'nvidia/os-interface.c' "$work/core-workqueue-schedule.txt" >/dev/null
 grep -F 'nvidia/nv-gvi.c' "$work/core-workqueue-schedule.txt" >/dev/null
@@ -139,7 +168,12 @@ test "$(wc -l < "$work/core-workqueue-flush.txt")" -eq 4
 rg -n '^[[:space:]]*flush_scheduled_work\(\);' "$prepared/nvidia-modeset" >"$work/modeset-flush.txt"
 test "$(wc -l < "$work/modeset-flush.txt")" -eq 2
 
-if git -C "$repo" status --short | grep -E '\.(rej|ko|ko\.zst|deb|dsc|changes|buildinfo)$|NVIDIA-Linux-.*\.run|\.so$'; then
-    echo 'generated or proprietary artifact is staged or present in repository status' >&2
-    exit 1
+if git -C "$repo" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    status=$(git -C "$repo" status --short)
+    if printf '%s\n' "$status" |
+       grep -E '\.(rej|ko|ko\.zst|deb|dsc|changes|buildinfo)$|NVIDIA-Linux-.*\.run|\.so$'
+    then
+        echo 'generated or proprietary artifact is staged or present in repository status' >&2
+        exit 1
+    fi
 fi
