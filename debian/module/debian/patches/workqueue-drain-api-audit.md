@@ -101,7 +101,7 @@ after the second snapshot receive higher sequence numbers and do not delay that
 flush. Concurrent flushers are safe because each uses its own snapshots and the
 shared completed sequence advances in FIFO worker order.
 
-The worker uses `wait_event_interruptible()` for its idle sleep, matching the later NVIDIA kthread-queue rationale that an idle queue thread should not remain in uninterruptible sleep and be classified as a potential hung task. Unexpected interruptions are retried without consuming queue entries; `kthread_stop()` is rechecked immediately after wakeup so stop still terminates the worker. The worker wait predicate also acquires the spin lock before checking list
+The worker uses `wait_event_interruptible()` for its idle sleep, matching the later NVIDIA kthread-queue rationale that an idle queue thread should not remain in uninterruptible sleep and be classified as a potential hung task. Unexpected interruptions yield with `cond_resched()` and are retried without consuming queue entries; `kthread_stop()` is rechecked immediately after wakeup so stop still terminates the worker. The worker wait predicate also acquires the spin lock before checking list
 emptiness. Enqueue publishes list and sequence state before dropping the lock and
 waking the worker wait queue, preventing lost wakeups with the wait-event
 predicate recheck.
@@ -165,7 +165,7 @@ responsibility as before.
 | `schedule_timeout`/scheduler wait internals | macro path only if emitted | macro path only if emitted | macro path only if emitted | final authority undefined-symbol audit |
 | `alloc_workqueue`, `alloc_ordered_workqueue`, `create_singlethread_workqueue`, `destroy_workqueue`, `flush_work`, `cancel_work_sync` | not used | not used | not used | prohibited/rejected |
 
-`tools/audit-module-symbols.sh` now performs the exact undefined-symbol versus `Module.symvers` check for each built module and fails on missing or GPL-only exports. The CI/build status should distinguish package MODPOST success from this stricter symbol audit:
+`tools/audit-module-symbols.sh` now accepts an exact `Module.symvers` file or resolved header directory, records the kernel release, header directory, Module.symvers path/checksum, and `nm` version, and fails on missing or GPL-only exports. The CI/build status should distinguish package MODPOST success from this stricter symbol audit:
 
 | target | compile/link/MODPOST | undefined-symbol audit | exact release status |
 |---|---|---|---|
@@ -173,7 +173,15 @@ responsibility as before.
 | Trixie | confirmed by package CI on the reviewed parent; rerun required for each new head | tool added; report required from built artifacts | Debian `linux-headers-amd64` selected in package job |
 | Ubuntu 24.04 GA 6.8 | new `ubuntu-6.8-module` CI job added; success required before claiming verification | new CI job runs `tools/audit-module-symbols.sh` after MODPOST | job rejects non-`6.8.*-generic` headers |
 
-No completed local Ubuntu 6.8 build result is claimed here.
+No completed local Ubuntu 6.8 build result is claimed here. GitHub workflow syntax is guarded by a pinned `tools/check-github-actions.sh` actionlint invocation plus a structural job-ID check; the experimental Ubuntu 6.8 job lives in a separate workflow so syntax or runtime failures there do not disable the established Debian static/package workflow.
+
+## Test-scope note
+
+`tests/core-workqueue-state-model.c` and `tests/core-workqueue-selftest.c` are
+userspace state-machine/compile scaffolds only. They do not exercise kernel spin
+locks, kernel wait queues, actual kthread scheduling, `kthread_stop()` races,
+interrupt-context scheduling, or proprietary RM callbacks. They are intended to
+catch deterministic API/state regressions before build and runtime validation.
 
 ## Remaining limitations
 

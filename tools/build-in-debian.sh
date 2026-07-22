@@ -1,4 +1,5 @@
 #!/bin/sh
+# shellcheck disable=SC2317
 set -eu
 
 if [ "$#" -ne 3 ]; then
@@ -170,6 +171,9 @@ run_repository_test drm-preprocessor-balance-fixtures tests/drm-preprocessor-bal
 run_repository_test userspace-manifest-inventory-fixtures tests/userspace-manifest-inventory.sh
 run_repository_test module-build-diagnostics tests/module-build-diagnostics.sh
 run_repository_test core-workqueue-drain tests/core-workqueue-drain.sh
+run_repository_test module-symbol-audit tests/module-symbol-audit.sh
+run_repository_test ci-workflow-static tests/ci-workflow-static.sh
+run_repository_test runtime-collector-static tests/runtime-collector-static.sh
 run_repository_test userspace-manifest-inventory tests/userspace-manifest-inventory.sh "/work/import/NVIDIA-Linux-x86_64-$version"
 
 set_stage module-series-integrity
@@ -370,14 +374,13 @@ set +e
     else
         echo no > /work/logs/modpost-reached.txt
     fi
-    sed -n 's|.*-C /lib/modules/\([^/[:space:]]*\)/build.*|\1|p' /work/logs/module-kbuild-command.txt | head -n 1 > /work/logs/module-kernel-release.txt || true
-    test -s /work/logs/module-kernel-release.txt || echo unknown > /work/logs/module-kernel-release.txt
+    sh /work/binary-source/tools/extract-kernel-release.sh /work/logs/module-kbuild-command.txt > /work/logs/module-kernel-release.txt || echo unknown > /work/logs/module-kernel-release.txt
     module_kernel=$(cat /work/logs/module-kernel-release.txt)
     if grep -qx yes /work/logs/nvidia-ko-created.txt && grep -qx yes /work/logs/nvidia-modeset-ko-created.txt && \
        grep -qx yes /work/logs/nvidia-drm-ko-created.txt && grep -qx yes /work/logs/nvidia-uvm-ko-created.txt && \
        test "$module_kernel" != unknown; then
         sh /work/binary-source/tools/audit-module-symbols.sh \
-            "$module_source" "$module_kernel" /work/logs/module-symbol-audit \
+            "$module_source" "/lib/modules/$module_kernel/build" /work/logs/module-symbol-audit \
             > /work/logs/module-symbol-audit.log 2>&1 || \
             echo "module symbol audit failed" >> /work/logs/post-build-diagnostics-failures.txt
     else

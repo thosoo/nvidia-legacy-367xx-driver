@@ -20,7 +20,7 @@ jobs:
               apt-get update
               apt-get install -y --no-install-recommends \
                 git curl python3 build-essential ripgrep make perl \
-                dpkg-dev debhelper dh-dkms quilt xz-utils ca-certificates
+                dpkg-dev debhelper dh-dkms quilt xz-utils ca-certificates shellcheck
 
               git config --global --add safe.directory /repo
 
@@ -37,7 +37,15 @@ jobs:
               tests/kmap-types-header.sh
               tests/linux-ioctl32-compat.sh
               tests/post-build-diagnostics-status.sh
+              tools/check-github-actions.sh
+              tests/ci-workflow-static.sh
+              tests/runtime-collector-static.sh
+              shellcheck tools/build-ubuntu-6.8-module.sh
+              shellcheck tools/audit-module-symbols.sh
+              shellcheck tools/collect-workqueue-runtime.sh
+              shellcheck tools/build-in-debian.sh
               tests/core-workqueue-drain.sh
+              tests/module-symbol-audit.sh
             '
       - name: Verify clean checkout
         run: test -z "$(git status --porcelain)"
@@ -55,6 +63,7 @@ jobs:
             debian:bookworm \
             sh /repo/tools/build-in-debian.sh bookworm /repo /out
       - name: Guard Bookworm diagnostic artifact contents
+        id: artifact_guard
         if: always()
         run: tests/no-uploaded-proprietary-artifacts.sh ci-results/bookworm/logs
       - name: Check Bookworm exported diagnostics are readable
@@ -67,7 +76,7 @@ jobs:
             exit 1
           fi
       - name: Upload Bookworm diagnostics
-        if: always()
+        if: ${{ always() && steps.artifact_guard.outcome == 'success' }}
         uses: actions/upload-artifact@v4
         with:
           name: build-logs-bookworm
@@ -87,6 +96,7 @@ jobs:
             debian:trixie \
             sh /repo/tools/build-in-debian.sh trixie /repo /out
       - name: Guard Trixie diagnostic artifact contents
+        id: artifact_guard
         if: always()
         run: tests/no-uploaded-proprietary-artifacts.sh ci-results/trixie/logs
       - name: Check Trixie exported diagnostics are readable
@@ -99,40 +109,9 @@ jobs:
             exit 1
           fi
       - name: Upload Trixie diagnostics
-        if: always()
+        if: ${{ always() && steps.artifact_guard.outcome == 'success' }}
         uses: actions/upload-artifact@v4
         with:
           name: build-logs-trixie
           path: ci-results/trixie/logs/
-          if-no-files-found: error
-
-  ubuntu-6.8-module:
-    name: ubuntu-6.8-module
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Build modules against Ubuntu 24.04 GA 6.8 headers
-        run: |
-          mkdir -p ci-results/ubuntu-6.8
-          docker run --rm \
-            -v "$PWD:/repo:ro" \
-            -v "$PWD/ci-results/ubuntu-6.8:/out:rw" \
-            ubuntu:24.04 \
-            sh -euxc '
-              export DEBIAN_FRONTEND=noninteractive
-              apt-get update
-              apt-get install -y --no-install-recommends \
-                ca-certificates curl git python3 build-essential ripgrep make perl \
-                dpkg-dev debhelper dh-dkms quilt xz-utils kmod binutils linux-headers-generic
-              /repo/tools/build-ubuntu-6.8-module.sh /repo /out
-            '
-      - name: Guard Ubuntu diagnostic artifact contents
-        if: always()
-        run: tests/no-uploaded-proprietary-artifacts.sh ci-results/ubuntu-6.8
-      - name: Upload Ubuntu 6.8 diagnostics
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: build-logs-ubuntu-6.8
-          path: ci-results/ubuntu-6.8/
           if-no-files-found: error

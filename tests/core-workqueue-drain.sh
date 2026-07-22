@@ -80,7 +80,7 @@ if 'wait_event_interruptible(nv_linux_workqueue_worker_wait' not in main:
     raise SystemExit('worker idle wait must be interruptible')
 if 'wait_event(nv_linux_workqueue_worker_wait' in main:
     raise SystemExit('worker idle wait must not use plain wait_event')
-if main.count('kthread_should_stop()') < 2 or 'if (wait_rc != 0)' not in main or 'continue;' not in main:
+if main.count('kthread_should_stop()') < 2 or 'if (wait_rc != 0)' not in main or 'cond_resched();' not in main or 'continue;' not in main:
     raise SystemExit('worker interruptible wait must recheck stop and retry interruptions')
 call2=main.find('task->handler(task);')
 call3=main.find('task->handler(task->handler_data);')

@@ -1,0 +1,39 @@
+name: ubuntu-6.8-module
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  ubuntu_6_8_module:
+    name: ubuntu-6.8-module
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build modules against Ubuntu 24.04 GA 6.8 headers
+        run: |
+          mkdir -p ci-results/ubuntu-6.8
+          docker run --rm \
+            -v "$PWD:/repo:ro" \
+            -v "$PWD/ci-results/ubuntu-6.8:/out:rw" \
+            ubuntu:24.04 \
+            sh -euxc '
+              export DEBIAN_FRONTEND=noninteractive
+              apt-get update
+              apt-get install -y --no-install-recommends \
+                ca-certificates curl git python3 build-essential ripgrep make perl \
+                dpkg-dev debhelper dh-dkms quilt xz-utils kmod binutils linux-headers-generic
+              sh /repo/tools/build-ubuntu-6.8-module.sh /repo /out
+            '
+      - name: Guard Ubuntu diagnostic artifact contents
+        id: artifact_guard
+        if: always()
+        run: tests/no-uploaded-proprietary-artifacts.sh ci-results/ubuntu-6.8
+      - name: Upload Ubuntu 6.8 diagnostics
+        if: ${{ always() && steps.artifact_guard.outcome == 'success' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-logs-ubuntu-6.8
+          path: ci-results/ubuntu-6.8/
+          if-no-files-found: error

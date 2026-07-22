@@ -17,12 +17,12 @@ Forwarded: not-needed
  #include <linux/wait.h>             /* wait queues                      */
 +#include <linux/kthread.h>          /* kthread_create_on_node(), stop   */
  #include <linux/string.h>           /* strchr(), strpbrk()              */
-
+ 
  #include <linux/ctype.h>            /* isspace(), etc                   */
 @@ -1732,32 +1733,70 @@
  #endif /* defined(NV_SG_ALLOC_TABLE_FROM_PAGES_PRESENT) &&
            !defined(NV_DOM0_KERNEL_PRESENT) */
-
+ 
 -typedef struct work_struct nv_task_t;
 +typedef struct nv_task_s nv_task_t;
 +
@@ -45,12 +45,12 @@ Forwarded: not-needed
 +    NvBool running;
 +    NvBool requeueable;
 +};
-
+ 
  typedef struct nv_work_s {
      nv_task_t task;
      void *data;
  } nv_work_t;
-
+ 
 -#define NV_WORKQUEUE_SCHEDULE(work) schedule_work(work)
 -#define NV_WORKQUEUE_FLUSH()                           \
 -    flush_scheduled_work();
@@ -104,10 +104,10 @@ Forwarded: not-needed
  #define NV_WORKQUEUE_UNPACK_DATA(tq) (nv_work_t *)(tq)
 --- a/nvidia/nv.c
 +++ b/nvidia/nv.c
-@@ -55,6 +55,345 @@
+@@ -55,6 +55,346 @@
  static NvU32 num_nv_devices = 0;
  NvU32 num_probed_nv_devices = 0;
-
+ 
 +typedef enum
 +{
 +    NV_WQ_UNINITIALIZED = 0,
@@ -197,10 +197,11 @@ Forwarded: not-needed
 +        if (wait_rc != 0)
 +        {
 +            /*
-+             * Unexpected interruption of the idle kernel worker wait. Retry
-+             * without consuming or losing queued work; the locked predicate is
-+             * rechecked before sleeping again.
++             * Unexpected interruption of the idle kernel worker wait. Yield,
++             * then retry without consuming or losing queued work; the locked
++             * predicate is rechecked before sleeping again.
 +             */
++            cond_resched();
 +            continue;
 +        }
 +
@@ -449,11 +450,11 @@ Forwarded: not-needed
 +
  NvU32 nv_assign_gpu_count = 0;
  nv_pci_info_t nv_assign_gpu_pci_info[NV_MAX_DEVICES];
-
+ 
 @@ -682,12 +1000,22 @@
          goto failed5;
      }
-
+ 
 -    if (!rm_init_rm(sp))
 +    rc = nv_linux_workqueue_init();
 +    if (rc != 0)
@@ -473,25 +474,25 @@ Forwarded: not-needed
 +        NV_KMEM_CACHE_DESTROY(nvidia_stack_t_cache);
          goto failed5;
      }
-
+ 
 @@ -985,6 +1313,9 @@
      nv_unregister_chrdev((void *)&nv_fops);
-
+ 
  failed4:
 +    if (WARN_ON_ONCE(nv_linux_workqueue_shutdown() != 0))
 +        return -EDEADLK;
 +
      nv_lock_destroy_locks(sp, nv);
      rm_shutdown_rm(sp);
-
+ 
 @@ -1022,6 +1353,8 @@
-
+ 
      nv_unregister_chrdev((void *)&nv_fops);
-
+ 
 +    WARN_ON_ONCE(nv_linux_workqueue_shutdown() != 0);
 +
      nv_lock_destroy_locks(sp, nv);
-
+ 
      // Shutdown the resource manager
 @@ -1662,7 +1995,7 @@
      if (NV_IS_GVI_DEVICE(nv))
@@ -503,7 +504,7 @@ Forwarded: not-needed
      }
      else
 @@ -3389,7 +3722,7 @@
-
+ 
      if (NV_IS_GVI_DEVICE(nv))
      {
 -        NV_WORKQUEUE_FLUSH();
@@ -516,29 +517,29 @@ Forwarded: not-needed
 @@ -22,11 +22,7 @@
  irqreturn_t nv_gvi_kern_isr             (int, void *);
  #endif
-
+ 
 -#if (NV_INIT_WORK_ARGUMENT_COUNT == 3)
 -void        nv_gvi_kern_bh              (void *);
 -#else
 -void        nv_gvi_kern_bh              (struct work_struct *);
 -#endif
 +void        nv_gvi_kern_bh              (NV_WORKQUEUE_DATA_T *);
-
+ 
  #if defined(NV_PM_SUPPORT_DEVICE_DRIVER_MODEL)
  int         nv_gvi_kern_suspend         (struct pci_dev *, pm_message_t);
 --- a/nvidia/os-interface.c
 +++ b/nvidia/os-interface.c
 @@ -1049,8 +1049,6 @@
-
+ 
      rm_execute_work_item(sp, work->data);
-
+ 
 -    os_free_mem((void *)work);
 -
      nv_kmem_cache_free_stack(sp);
  }
-
+ 
 @@ -1070,7 +1068,13 @@
-
+ 
      NV_WORKQUEUE_INIT(&work->task, os_execute_work_item,
                        (void *)work);
 -    NV_WORKQUEUE_SCHEDULE(&work->task);
@@ -549,7 +550,7 @@ Forwarded: not-needed
 +        os_free_mem((void *)work);
 +        return NV_ERR_INVALID_STATE;
 +    }
-
+ 
      return NV_OK;
  }
 @@ -1079,8 +1083,8 @@
@@ -566,9 +567,9 @@ Forwarded: not-needed
 --- a/nvidia/nv-gvi.c
 +++ b/nvidia/nv-gvi.c
 @@ -87,7 +87,12 @@
-
+ 
      nv->flags |= NV_FLAG_GVI_IN_SUSPEND;
-
+ 
 -    NV_WORKQUEUE_FLUSH();
 +    status = NV_WORKQUEUE_FLUSH_STATUS();
 +    if (status != 0)
@@ -576,6 +577,6 @@ Forwarded: not-needed
 +        nv->flags &= ~NV_FLAG_GVI_IN_SUSPEND;
 +        goto failed;
 +    }
-
+ 
      status = rm_gvi_suspend(sp, nv);
      if (status != 0)

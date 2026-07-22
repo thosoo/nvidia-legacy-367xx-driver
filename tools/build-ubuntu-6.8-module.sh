@@ -48,5 +48,5 @@ else
     printf no > "$out/logs/modpost-reached.txt"
     exit 1
 fi
-"$repo/tools/audit-module-symbols.sh" "$prepared" "$kernel" "$out/symbols" > "$out/logs/symbol-audit.log" 2>&1
+sh "$repo/tools/audit-module-symbols.sh" "$prepared" "$headers" "$out/symbols" > "$out/logs/symbol-audit.log" 2>&1
 cat "$out/logs/symbol-audit.log"
