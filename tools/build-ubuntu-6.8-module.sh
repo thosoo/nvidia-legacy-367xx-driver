@@ -39,6 +39,7 @@ for mod in nvidia nvidia-modeset nvidia-drm nvidia-uvm; do
     printf yes > "$out/logs/$mod-ko-created.txt"
 done
 test -s "$prepared/modules.order"
+test -s "$headers/Module.symvers"
 test -s "$prepared/Module.symvers"
 printf yes > "$out/logs/modules-order-created.txt"
 printf yes > "$out/logs/module-symvers-created.txt"
@@ -48,5 +49,5 @@ else
     printf no > "$out/logs/modpost-reached.txt"
     exit 1
 fi
-sh "$repo/tools/audit-module-symbols.sh" "$prepared" "$headers" "$out/symbols" > "$out/logs/symbol-audit.log" 2>&1
+sh "$repo/tools/audit-module-symbols.sh" "$prepared" "$headers/Module.symvers" "$prepared/Module.symvers" "$out/symbols" > "$out/logs/symbol-audit.log" 2>&1
 cat "$out/logs/symbol-audit.log"

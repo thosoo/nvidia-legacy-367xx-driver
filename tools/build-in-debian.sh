@@ -378,9 +378,12 @@ set +e
     module_kernel=$(cat /work/logs/module-kernel-release.txt)
     if grep -qx yes /work/logs/nvidia-ko-created.txt && grep -qx yes /work/logs/nvidia-modeset-ko-created.txt && \
        grep -qx yes /work/logs/nvidia-drm-ko-created.txt && grep -qx yes /work/logs/nvidia-uvm-ko-created.txt && \
-       test "$module_kernel" != unknown; then
+       test "$module_kernel" != unknown && \
+       test -s "/lib/modules/$module_kernel/build/Module.symvers" && \
+       test -s "$module_source/Module.symvers"; then
         sh /work/binary-source/tools/audit-module-symbols.sh \
-            "$module_source" "/lib/modules/$module_kernel/build" /work/logs/module-symbol-audit \
+            "$module_source" "/lib/modules/$module_kernel/build/Module.symvers" \
+            "$module_source/Module.symvers" /work/logs/module-symbol-audit \
             > /work/logs/module-symbol-audit.log 2>&1 || \
             echo "module symbol audit failed" >> /work/logs/post-build-diagnostics-failures.txt
     else
