@@ -169,6 +169,7 @@ run_repository_test uvm-interface-header-order tests/uvm-interface-header-order.
 run_repository_test drm-preprocessor-balance-fixtures tests/drm-preprocessor-balance.sh
 run_repository_test userspace-manifest-inventory-fixtures tests/userspace-manifest-inventory.sh
 run_repository_test module-build-diagnostics tests/module-build-diagnostics.sh
+run_repository_test core-workqueue-drain tests/core-workqueue-drain.sh
 run_repository_test userspace-manifest-inventory tests/userspace-manifest-inventory.sh "/work/import/NVIDIA-Linux-x86_64-$version"
 
 set_stage module-series-integrity
