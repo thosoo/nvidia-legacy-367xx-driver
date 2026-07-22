@@ -123,7 +123,14 @@ if not (shutdown.find('current == thread') < shutdown.find('nv_linux_workqueue_s
     raise SystemExit('shutdown self-check, DRAINING, and STOPPING ordering is wrong')
 if shutdown.find('nv_linux_workqueue_flush()') > shutdown.find('nv_linux_workqueue_state = NV_WQ_STOPPING'):
     raise SystemExit('shutdown must run drain barriers before STOPPING')
-for text in ['NV_WQ_UNINITIALIZED', 'NV_WQ_INITIALIZING', 'NV_WQ_DRAINING', 'NV_WQ_STOPPING', 'NV_WQ_STOPPED', 'wait_event(nv_linux_workqueue_shutdown_wait', 'nv_linux_workqueue_initializing_done', 'wake_up_all(&nv_linux_workqueue_shutdown_wait)', 'nv_linux_workqueue_thread = NULL', 'return -EDEADLK;', 'return 0;']:
+if '(nv_linux_workqueue_state == NV_WQ_DRAINING) ||' not in shutdown:
+    raise SystemExit('DRAINING shutdown callers must wait instead of becoming owners')
+if shutdown.count('kthread_stop(thread)') != 1:
+    raise SystemExit('exactly one shutdown path may call kthread_stop')
+failure_match=re.search(r'if \(rc != 0\)\s*\{(?P<body>.*?)\n        \}', shutdown, re.S)
+if not failure_match or 'nv_linux_workqueue_generation++' not in failure_match.group('body') or 'wake_up_all(&nv_linux_workqueue_shutdown_wait)' not in failure_match.group('body'):
+    raise SystemExit('owner drain-failure path must publish result/generation and wake waiters')
+for text in ['NV_WQ_UNINITIALIZED', 'NV_WQ_INITIALIZING', 'NV_WQ_DRAINING', 'NV_WQ_STOPPING', 'NV_WQ_STOPPED', 'nv_linux_workqueue_shutdown_result', 'nv_linux_workqueue_generation', 'nv_linux_workqueue_generation_done', 'wait_event(nv_linux_workqueue_shutdown_wait', 'nv_linux_workqueue_initializing_done', 'wake_up_all(&nv_linux_workqueue_shutdown_wait)', 'nv_linux_workqueue_thread = NULL', 'return -EDEADLK;', 'return 0;']:
     if text not in shutdown:
         raise SystemExit(f'shutdown state machine missing {text}')
 rm_fail_start=core.find('if (!rm_init_rm(sp))')
@@ -186,15 +193,30 @@ echo state-model
 cat > "$work/state-model.c" <<'CMODEL'
 #include <assert.h>
 typedef enum { NV_WQ_UNINITIALIZED, NV_WQ_INITIALIZING, NV_WQ_RUNNING, NV_WQ_DRAINING, NV_WQ_STOPPING, NV_WQ_STOPPED } state_t;
+typedef struct { state_t state; unsigned long long generation; int result; int stop_calls; } queue_t;
 typedef struct { int queued, running, requeueable; unsigned long long queued_sequence; } task_t;
 static int can_schedule(task_t *task, state_t state, int thread) { return thread && (state == NV_WQ_RUNNING || state == NV_WQ_DRAINING) && !task->queued && (task->requeueable || (task->queued_sequence == 0)); }
-static int shutdown_transition(state_t *state, int self) {
-    if (self) return -1;
-    if (*state == NV_WQ_UNINITIALIZED || *state == NV_WQ_STOPPED) { *state = NV_WQ_STOPPED; return 0; }
-    if (*state == NV_WQ_INITIALIZING) return 3;
-    if (*state == NV_WQ_STOPPING) return 1;
-    *state = NV_WQ_DRAINING; return 2;
+static int begin_shutdown(queue_t *q, int self, unsigned long long *observed) {
+    if (self) return -11;
+    if (q->state == NV_WQ_UNINITIALIZED || q->state == NV_WQ_STOPPED) { q->state = NV_WQ_STOPPED; return 0; }
+    if (q->state == NV_WQ_INITIALIZING || q->state == NV_WQ_DRAINING || q->state == NV_WQ_STOPPING) { *observed = q->generation; return 1; }
+    q->state = NV_WQ_DRAINING; return 2;
 }
+static int waiter_done(queue_t *q, unsigned long long observed) { return q->generation != observed; }
+static void owner_stop(queue_t *q, int result) {
+    assert(q->state == NV_WQ_DRAINING);
+    if (result) { q->state = NV_WQ_RUNNING; q->result = result; q->generation++; return; }
+    q->state = NV_WQ_STOPPING;
+    q->stop_calls++;
+    q->state = NV_WQ_STOPPED;
+    q->result = 0;
+    q->generation++;
+}
+static int begin_init(queue_t *q) {
+    if (q->state == NV_WQ_INITIALIZING || q->state == NV_WQ_RUNNING || q->state == NV_WQ_DRAINING || q->state == NV_WQ_STOPPING) return -1;
+    q->state = NV_WQ_INITIALIZING; return 0;
+}
+static void finish_init(queue_t *q, int ok) { q->state = ok ? NV_WQ_RUNNING : NV_WQ_STOPPED; q->generation++; }
 int main(void) {
     task_t dyn = {0,0,0,0};
     assert(can_schedule(&dyn, NV_WQ_RUNNING, 1));
@@ -208,13 +230,17 @@ int main(void) {
     assert(can_schedule(&stat, NV_WQ_DRAINING, 1));
     assert(!can_schedule(&stat, NV_WQ_STOPPING, 1));
     stat.queued = 1; assert(!can_schedule(&stat, NV_WQ_RUNNING, 1));
-    state_t state = NV_WQ_RUNNING;
-    assert(shutdown_transition(&state, 0) == 2 && state == NV_WQ_DRAINING);
-    state = NV_WQ_STOPPING; assert(shutdown_transition(&state, 0) == 1 && state == NV_WQ_STOPPING);
-    state = NV_WQ_INITIALIZING; assert(shutdown_transition(&state, 0) == 3 && state == NV_WQ_INITIALIZING);
-    state = NV_WQ_STOPPED; assert(shutdown_transition(&state, 0) == 0 && state == NV_WQ_STOPPED);
-    state = NV_WQ_UNINITIALIZED; assert(shutdown_transition(&state, 0) == 0 && state == NV_WQ_STOPPED);
-    state = NV_WQ_RUNNING; assert(shutdown_transition(&state, 1) == -1 && state == NV_WQ_RUNNING);
+    queue_t q = { NV_WQ_RUNNING, 7, 0, 0 }; unsigned long long seen = 0;
+    assert(begin_shutdown(&q, 0, &seen) == 2 && q.state == NV_WQ_DRAINING);
+    assert(begin_shutdown(&q, 0, &seen) == 1 && seen == 7 && q.state == NV_WQ_DRAINING);
+    owner_stop(&q, 0); assert(q.stop_calls == 1 && q.state == NV_WQ_STOPPED && q.generation == 8 && waiter_done(&q, seen));
+    assert(begin_shutdown(&q, 0, &seen) == 0 && q.stop_calls == 1);
+    q.state = NV_WQ_STOPPING; q.generation = 9; assert(begin_shutdown(&q, 0, &seen) == 1 && seen == 9);
+    q.generation = 10; assert(waiter_done(&q, seen));
+    q.state = NV_WQ_RUNNING; assert(begin_shutdown(&q, 1, &seen) == -11 && q.state == NV_WQ_RUNNING);
+    q.state = NV_WQ_INITIALIZING; q.generation = 11; assert(begin_shutdown(&q, 0, &seen) == 1 && seen == 11); finish_init(&q, 1); assert(waiter_done(&q, seen));
+    q.state = NV_WQ_STOPPED; assert(begin_init(&q) == 0 && begin_init(&q) == -1); finish_init(&q, 0); assert(q.state == NV_WQ_STOPPED);
+    assert(begin_init(&q) == 0); finish_init(&q, 1); assert(q.state == NV_WQ_RUNNING);
     return 0;
 }
 CMODEL
