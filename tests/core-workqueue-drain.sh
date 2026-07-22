@@ -9,6 +9,9 @@ series=$patchdir/series.in
 grep -Fx 'backport-core-system-workqueue-drain.patch' "$series" >/dev/null
 test -f "$patch"
 test -f "$audit"
+grep -F "Description:" "$patch" >/dev/null
+grep -F "Author:" "$patch" >/dev/null
+grep -F "Forwarded:" "$patch" >/dev/null
 
 python3 - "$series" <<'PY'
 import pathlib, sys
@@ -69,7 +72,7 @@ for text in ['typedef struct nv_task_s nv_task_t', 'nv_task_t task;', 'container
         raise SystemExit(f'missing work-object layout text: {text}')
 if re.search(r'#define NV_WORKQUEUE_INIT\([^)]*\bhandler\b[^)]*\)', header):
     raise SystemExit('NV_WORKQUEUE_INIT still uses colliding handler parameter')
-for required in ['nv_linux_workqueue_has_work', 'nv_linux_workqueue_barrier_done', 'nv_linux_workqueue_worker_wait', 'nv_linux_workqueue_flush_wait', 'kthread_create_on_node', 'kthread_stop']:
+for required in ['NV_WQ_UNINITIALIZED', 'NV_WQ_RUNNING', 'NV_WQ_STOPPING', 'NV_WQ_STOPPED', 'nv_linux_workqueue_has_work', 'nv_linux_workqueue_barrier_done', 'nv_linux_workqueue_shutdown_done', 'nv_linux_workqueue_worker_wait', 'nv_linux_workqueue_flush_wait', 'nv_linux_workqueue_shutdown_wait', 'kthread_create_on_node', 'kthread_stop']:
     if required not in core:
         raise SystemExit(f'{required} missing')
 main=re.search(r'static int nv_linux_workqueue_main\([^)]*\)\s*\{(?P<body>.*?)\n\}', core, re.S).group('body')
@@ -88,24 +91,30 @@ if 'work->task.requeueable = NV_FALSE;' not in osi or 'work->task.owned_allocati
     raise SystemExit('dynamic ownership/reject path missing')
 if 'os_free_mem((void *)work);' in re.search(r'static void os_execute_work_item\([^)]*\)\s*\{(?P<body>.*?)\n\}', osi, re.S).group('body'):
     raise SystemExit('dynamic callback still frees wrapper')
+flush_once=re.search(r'static int nv_linux_workqueue_flush_once\([^)]*\)\s*\{(?P<body>.*?)\n\}', core, re.S).group('body')
 flush=re.search(r'int nv_linux_workqueue_flush\([^)]*\)\s*\{(?P<body>.*?)\n\}', core, re.S).group('body')
-if 'current == nv_linux_workqueue_thread' not in flush or 'return -EDEADLK;' not in flush or 'nv_linux_workqueue_barrier_done(barrier)' not in flush:
+if 'current == nv_linux_workqueue_thread' not in flush_once or 'return -EDEADLK;' not in flush_once or 'nv_linux_workqueue_barrier_done(barrier)' not in flush_once:
     raise SystemExit('flush lacks worker diagnostic or synchronized barrier predicate')
+if flush.count('nv_linux_workqueue_flush_once()') != 2:
+    raise SystemExit('flush must use two FIFO barriers to include one callback-generated requeue wave')
 
 schedule=re.search(r'int nv_linux_workqueue_schedule\([^)]*\)\s*\{(?P<body>.*?)\n\}', core, re.S).group('body')
 if 'task->requeueable || (task->queued_sequence == 0)' not in schedule:
     raise SystemExit('dynamic one-shot/static requeue schedule rule missing')
-for needle in ['nv_linux_workqueue_shutdown() != 0', 'NV_WORKQUEUE_FLUSH_STATUS() != 0', 'return;', 'return status;']:
+for needle in ['BUG_ON(nv_linux_workqueue_shutdown() != 0)', 'BUG_ON(NV_WORKQUEUE_FLUSH_STATUS() != 0)', 'return status;']:
     if needle not in core + gvi:
         raise SystemExit(f'direct flush call-site handling missing {needle}')
+if 'rm_shutdown_gvi_device(sp, nv);\n        BUG_ON(NV_WORKQUEUE_FLUSH_STATUS() != 0)' in core:
+    raise SystemExit('nv_stop_device flush must precede irreversible GVI shutdown')
 
 shutdown_start=core.find('int nv_linux_workqueue_shutdown(void)')
 shutdown_end=core.find('NvU32 nv_assign_gpu_count', shutdown_start)
 shutdown=core[shutdown_start:shutdown_end]
-if not (shutdown.find('current == thread') < shutdown.find('nv_linux_workqueue_stopping = NV_TRUE')):
-    raise SystemExit('shutdown self-check must precede stopping transition')
-if 'return -EDEADLK;' not in shutdown or 'return 0;' not in shutdown:
-    raise SystemExit('shutdown must return explicit status')
+if not (shutdown.find('current == thread') < shutdown.find('nv_linux_workqueue_state = NV_WQ_STOPPING')):
+    raise SystemExit('shutdown self-check must precede STOPPING transition')
+for text in ['NV_WQ_UNINITIALIZED', 'NV_WQ_STOPPING', 'NV_WQ_STOPPED', 'wait_event(nv_linux_workqueue_shutdown_wait', 'wake_up_all(&nv_linux_workqueue_shutdown_wait)', 'nv_linux_workqueue_thread = NULL', 'return -EDEADLK;', 'return 0;']:
+    if text not in shutdown:
+        raise SystemExit(f'shutdown state machine missing {text}')
 def order(haystack, first, second, label):
     i=haystack.find(first); j=haystack.find(second)
     if i < 0 or j < 0 or i > j:
@@ -113,19 +122,19 @@ def order(haystack, first, second, label):
 rm_fail_start=core.find('if (!rm_init_rm(sp))')
 rm_fail_end=core.find('// init the nvidia control device', rm_fail_start)
 rm_fail=core[rm_fail_start:rm_fail_end]
-order(rm_fail, 'nv_linux_workqueue_shutdown() != 0', 'nv_kmem_cache_free_stack(sp);', 'rm_init_rm failure frees stack before queue shutdown')
-order(rm_fail, 'nv_linux_workqueue_shutdown() != 0', 'NV_KMEM_CACHE_DESTROY(nvidia_stack_t_cache);', 'rm_init_rm failure destroys stack cache before queue shutdown')
+order(rm_fail, 'BUG_ON(nv_linux_workqueue_shutdown() != 0)', 'nv_kmem_cache_free_stack(sp);', 'rm_init_rm failure frees stack before queue shutdown')
+order(rm_fail, 'BUG_ON(nv_linux_workqueue_shutdown() != 0)', 'NV_KMEM_CACHE_DESTROY(nvidia_stack_t_cache);', 'rm_init_rm failure destroys stack cache before queue shutdown')
 failed4_start=core.find('failed4:')
 failed4_end=core.find('failed5:', failed4_start)
 failed4=core[failed4_start:failed4_end]
-order(failed4, 'nv_linux_workqueue_shutdown() != 0', 'nv_lock_destroy_locks(sp, nv);', 'later init rollback destroys locks before queue shutdown')
-order(failed4, 'nv_linux_workqueue_shutdown() != 0', 'rm_shutdown_rm(sp);', 'later init rollback shuts RM down before queue shutdown')
+order(failed4, 'BUG_ON(nv_linux_workqueue_shutdown() != 0)', 'nv_lock_destroy_locks(sp, nv);', 'later init rollback destroys locks before queue shutdown')
+order(failed4, 'BUG_ON(nv_linux_workqueue_shutdown() != 0)', 'rm_shutdown_rm(sp);', 'later init rollback shuts RM down before queue shutdown')
 exit_start=core.find('void nvidia_exit_module(void)')
 exit_end=core.find('module_exit(nvidia_exit_module);', exit_start)
 exit_body=core[exit_start:exit_end]
-order(exit_body, 'nv_linux_workqueue_shutdown() != 0', 'nv_lock_destroy_locks(sp, nv);', 'module exit destroys locks before queue shutdown')
-order(exit_body, 'nv_linux_workqueue_shutdown() != 0', 'rm_shutdown_rm(sp);', 'module exit shuts RM down before queue shutdown')
-order(exit_body, 'nv_linux_workqueue_shutdown() != 0', 'NV_KMEM_CACHE_DESTROY(nvidia_stack_t_cache);', 'module exit destroys stack cache before queue shutdown')
+order(exit_body, 'BUG_ON(nv_linux_workqueue_shutdown() != 0)', 'nv_lock_destroy_locks(sp, nv);', 'module exit destroys locks before queue shutdown')
+order(exit_body, 'BUG_ON(nv_linux_workqueue_shutdown() != 0)', 'rm_shutdown_rm(sp);', 'module exit shuts RM down before queue shutdown')
+order(exit_body, 'BUG_ON(nv_linux_workqueue_shutdown() != 0)', 'NV_KMEM_CACHE_DESTROY(nvidia_stack_t_cache);', 'module exit destroys stack cache before queue shutdown')
 for name in ['counted drain was rejected', 'Work object and callback ABI', 'Flush-barrier and wait-predicate semantics', 'Single-thread serialization and scope', 'nvidia-modeset']:
     if name not in audit:
         raise SystemExit(f'{name} missing from audit')
@@ -169,19 +178,32 @@ compile_probe 3
 echo state-model
 cat > "$work/state-model.c" <<'CMODEL'
 #include <assert.h>
+typedef enum { NV_WQ_UNINITIALIZED, NV_WQ_RUNNING, NV_WQ_STOPPING, NV_WQ_STOPPED } state_t;
 typedef struct { int queued, running, requeueable; unsigned long long queued_sequence; } task_t;
-static int can_schedule(task_t *task) { return !task->queued && (task->requeueable || (task->queued_sequence == 0)); }
+static int can_schedule(task_t *task, state_t state, int thread) { return thread && state == NV_WQ_RUNNING && !task->queued && (task->requeueable || (task->queued_sequence == 0)); }
+static int shutdown_transition(state_t *state, int self) {
+    if (self) return -1;
+    if (*state == NV_WQ_UNINITIALIZED || *state == NV_WQ_STOPPED) { *state = NV_WQ_STOPPED; return 0; }
+    if (*state == NV_WQ_STOPPING) return 1;
+    *state = NV_WQ_STOPPING; return 2;
+}
 int main(void) {
     task_t dyn = {0,0,0,0};
-    assert(can_schedule(&dyn));
-    dyn.queued = 1; dyn.queued_sequence = 1; assert(!can_schedule(&dyn));
-    dyn.queued = 0; dyn.running = 1; assert(!can_schedule(&dyn));
-    dyn.running = 0; assert(!can_schedule(&dyn));
+    assert(can_schedule(&dyn, NV_WQ_RUNNING, 1));
+    dyn.queued = 1; dyn.queued_sequence = 1; assert(!can_schedule(&dyn, NV_WQ_RUNNING, 1));
+    dyn.queued = 0; dyn.running = 1; assert(!can_schedule(&dyn, NV_WQ_RUNNING, 1));
+    dyn.running = 0; assert(!can_schedule(&dyn, NV_WQ_RUNNING, 1));
     task_t stat = {0,0,1,0};
-    assert(can_schedule(&stat));
-    stat.queued = 1; stat.queued_sequence = 1; assert(!can_schedule(&stat));
-    stat.queued = 0; stat.running = 1; assert(can_schedule(&stat));
-    stat.queued = 1; assert(!can_schedule(&stat));
+    assert(can_schedule(&stat, NV_WQ_RUNNING, 1));
+    stat.queued = 1; stat.queued_sequence = 1; assert(!can_schedule(&stat, NV_WQ_RUNNING, 1));
+    stat.queued = 0; stat.running = 1; assert(can_schedule(&stat, NV_WQ_RUNNING, 1));
+    stat.queued = 1; assert(!can_schedule(&stat, NV_WQ_RUNNING, 1));
+    state_t state = NV_WQ_RUNNING;
+    assert(shutdown_transition(&state, 0) == 2 && state == NV_WQ_STOPPING);
+    assert(shutdown_transition(&state, 0) == 1 && state == NV_WQ_STOPPING);
+    state = NV_WQ_STOPPED; assert(shutdown_transition(&state, 0) == 0 && state == NV_WQ_STOPPED);
+    state = NV_WQ_UNINITIALIZED; assert(shutdown_transition(&state, 0) == 0 && state == NV_WQ_STOPPED);
+    state = NV_WQ_RUNNING; assert(shutdown_transition(&state, 1) == -1 && state == NV_WQ_RUNNING);
     return 0;
 }
 CMODEL

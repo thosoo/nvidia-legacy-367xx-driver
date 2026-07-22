@@ -23,9 +23,10 @@ two-argument callbacks recover the wrapper with `container_of(task, nv_work_t,
 task)`. The queue is initialized during core module initialization and stopped
 during failure rollback and module exit.
 
-The queue uses one spin lock for list, sequence, running, stopping, and thread
-pointer state; one non-interruptible worker wait queue for accepted work; and one flush wait queue
-for barrier completion. A flush snapshots the latest accepted sequence and waits
+The queue uses one spin lock for list, sequence, running, lifecycle state, and
+thread pointer state; one non-interruptible worker wait queue for accepted work;
+one flush wait queue for barrier completion; and one shutdown wait queue for
+concurrent shutdown serialization. A flush snapshots the latest accepted sequence and waits
 until the worker has invoked each callback through that sequence, the callback
 has returned, queue-owned cleanup has run, and only then the completed sequence
 has been published.
@@ -87,12 +88,16 @@ sequence, including static work requeued while the previous callback is running.
 
 ## Flush-barrier and wait-predicate semantics
 
-`NV_WORKQUEUE_FLUSH_STATUS()` snapshots `next_sequence` under the queue lock and waits
-on a separate flush wait queue until a helper has acquired the same lock and
-observed `completed_sequence >= barrier`. Later submissions receive higher
-sequence numbers and do not delay an older flush. Concurrent flushers are safe
-because each uses its own snapshot and the shared completed sequence advances in
-FIFO worker order.
+`NV_WORKQUEUE_FLUSH_STATUS()` executes two FIFO sequence barriers. Each barrier
+snapshots `next_sequence` under the queue lock and waits on a separate flush wait
+queue until a helper has acquired the same lock and observed
+`completed_sequence >= barrier`. The first barrier drains work accepted before
+the flush call; the second mirrors later NVIDIA `nv_kthread_q_flush()` behavior
+and includes one wave of callback-generated or self-requeued work accepted while
+callbacks ahead of the first barrier were running. Later independent submissions
+after the second snapshot receive higher sequence numbers and do not delay that
+flush. Concurrent flushers are safe because each uses its own snapshots and the
+shared completed sequence advances in FIFO worker order.
 
 The worker uses `wait_event()` rather than `wait_event_interruptible()` because no signal-handling behavior is required for this kernel thread. The worker wait predicate also acquires the spin lock before checking list
 emptiness. Enqueue publishes list and sequence state before dropping the lock and
@@ -101,17 +106,29 @@ predicate recheck.
 
 ## Shutdown and initialization semantics
 
-Module-init failure ordering: queue initialization is attempted exactly once after the stack cache and init stack are available; if `rm_init_rm()` fails, shutdown rejects new submissions, drains accepted work, and stops the worker before freeing the init stack or destroying `nvidia_stack_t_cache`. Later rollback ordering: queue shutdown runs before NVIDIA locks are destroyed and before `rm_shutdown_rm()`. Module-exit ordering: queue shutdown runs before RM shutdown and stack-cache teardown. Shutdown first verifies it is not running on `nvidia-wq`; only then it sets `stopping` under the lock so new
-submissions are rejected, wakes the worker wait queue, flushes all accepted work,
-then calls `kthread_stop()` and clears the thread pointer under the lock after
-thread exit. Shutdown from the worker thread is detected before mutating stopping state and returns `-EDEADLK` instead of self-stopping.
+Module-init failure ordering: queue initialization is attempted exactly once after the stack cache and init stack are available; if `rm_init_rm()` fails, `BUG_ON(nv_linux_workqueue_shutdown() != 0)` enforces the lifecycle precondition (`current != nvidia-wq`) and shutdown drains accepted work and stops the worker before freeing the init stack or destroying `nvidia_stack_t_cache`. Later rollback ordering: queue shutdown runs before NVIDIA locks are destroyed and before `rm_shutdown_rm()`. Module-exit ordering: queue shutdown runs before RM shutdown and stack-cache teardown. Shutdown uses the explicit states `NV_WQ_UNINITIALIZED`, `NV_WQ_RUNNING`, `NV_WQ_STOPPING`, and `NV_WQ_STOPPED`. Under the queue lock, only one caller can transition `RUNNING -> STOPPING`; concurrent shutdown callers wait for `STOPPED`; shutdown-before-init and shutdown-after-stop return success; the thread pointer and `STOPPED` state are published together under the lock and shutdown waiters are awakened afterward. Shutdown from the worker thread is detected before mutating state and returns `-EDEADLK`, which lifecycle callers treat as a nonrecoverable invariant violation via `BUG_ON`.
 
-A flush from the queue thread is diagnosed and returns `-EDEADLK` instead of silently deadlocking the single worker. `os_flush_work_queue()` maps that to `NV_ERR_ILLEGAL_ACTION`. Direct GVI teardown/removal/suspend sites are user-close, PCI driver-core, and PM-core contexts respectively, not `nvidia-wq` callback context; they call the status-returning flush and treat failure as an invariant violation/fail-closed path.
+A flush from the queue thread is diagnosed and returns `-EDEADLK` instead of silently deadlocking the single worker. `os_flush_work_queue()` maps that to `NV_ERR_ILLEGAL_ACTION`. Direct GVI teardown/removal/suspend sites are user-close, PCI driver-core, and PM-core contexts respectively, not `nvidia-wq` callback context. `nv_stop_device()` now flushes before `rm_shutdown_gvi_device()` and IRQ teardown. `nv_remove()` and `nv_gvi_kern_suspend()` use `BUG_ON(NV_WORKQUEUE_FLUSH_STATUS() != 0)` as an invariant check rather than pretending a void PCI removal callback can recover after partial teardown.
 
 ## Single-thread serialization and scope
 
 The queue is module-global, preserving the old core `flush_scheduled_work()`
-scope rather than creating per-device flushes. The authoritative later-source question is still open for semantic review. Public build evidence for 525.60.11 shows NVIDIA shipping `nv-kthread-q.c` in `nvidia`, `nvidia-uvm`, and `nvidia-modeset` DKMS builds, with `kthread_create_on_node()` and `kthread_create()` call sites in that file. That establishes the exact file/version family to inspect, but it does not by itself prove function-level equivalence for 367 RM work. Until a reviewer inspects that later source and confirms worker count, recursion behavior, callback wait behavior, flush-from-worker behavior, and multi-GPU scope, this PR must remain draft. This patch therefore keeps the old global flush scope rather than per-device scope: one device's earlier accepted core work can delay another flush. Visible 367 open source shows no callback calling `os_flush_work_queue()` and no GVI callback self-requeue, but visible-source absence is not treated as proof for proprietary RM behavior; the defensive worker-flush check prevents silent self-deadlock.
+scope rather than creating per-device flushes. NVIDIA open GPU kernel modules
+525.60.11 contain `kernel-open/nvidia/nv-kthread-q.c`. That implementation says each `nv_kthread_q` instance is FIFO and serviced by exactly one kthread; `_main_loop()` removes the first list item and invokes its function outside the lock; `nv_kthread_q_schedule_q_item()` rejects scheduling after `main_loop_should_exit` and otherwise coalesces only if the q_item list node is already pending; `nv_kthread_q_flush()` schedules a completion item and performs two raw flushes specifically for a self-rescheduling item; and `nv_kthread_q_stop()` flushes before setting the exit flag and calling `kthread_stop()`. This supports the single-thread FIFO and double-barrier shape, but it does not prove that 367 proprietary RM cannot synchronously wait for another queued callback, nor does it prove that all generic RM and GVI work should share one global queue. This PR therefore remains draft pending reviewer confirmation of RM recursion/wait behavior. The current patch keeps old global flush scope: one device's earlier accepted core work can delay another flush. Visible 367 open source shows no callback calling `os_flush_work_queue()` and no GVI callback self-requeue, but visible-source absence is not treated as proof for proprietary RM behavior; the defensive worker-flush check prevents silent self-deadlock.
+
+## RM shutdown ordering note
+
+The queue currently stops before `rm_shutdown_rm(sp)` so accepted callbacks cannot
+run after RM global teardown, locks, or the stack cache have been destroyed. That
+means a hidden RM submission attempted during `rm_shutdown_rm()` would be rejected
+with `NV_ERR_INVALID_STATE`. No visible 367 source calls `os_queue_work_item()`
+from module-exit code, and visible open-source callers ignore only the OS-layer
+return from hidden RM paths. Because proprietary RM shutdown behavior is not
+fully visible, this is an unresolved semantic risk rather than a proven-safe
+claim. A two-phase ordering (flush while RM is live, run RM shutdown while the
+executor remains available, then final drain/stop) must not be adopted unless it
+is proven that callbacks queued during RM shutdown remain valid after RM shutdown
+begins.
 
 ## Lock, deadlock, and memory ordering
 

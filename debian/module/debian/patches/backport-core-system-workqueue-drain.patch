@@ -1,3 +1,11 @@
+Description: Backport a core NVIDIA-owned kthread FIFO workqueue drain
+ Replace the core nvidia module's schedule_work()/flush_scheduled_work()
+ compatibility macros with a module-owned FIFO kthread executor and explicit
+ status-returning flush/shutdown operations. This avoids the Linux system-wide
+ workqueue flush warning while keeping nvidia-modeset out of scope.
+Author: Codex <codex@openai.com>
+Forwarded: not-needed
+
 --- a/common/inc/nv-linux.h
 +++ b/common/inc/nv-linux.h
 @@ -85,6 +85,7 @@
@@ -93,16 +101,25 @@
  #define NV_WORKQUEUE_UNPACK_DATA(tq) (nv_work_t *)(tq)
 --- a/nvidia/nv.c
 +++ b/nvidia/nv.c
-@@ -55,6 +55,210 @@
+@@ -55,6 +55,277 @@
  static NvU32 num_nv_devices = 0;
  NvU32 num_probed_nv_devices = 0;
 
++typedef enum
++{
++    NV_WQ_UNINITIALIZED = 0,
++    NV_WQ_RUNNING,
++    NV_WQ_STOPPING,
++    NV_WQ_STOPPED,
++} nv_linux_workqueue_state_t;
++
 +static DEFINE_SPINLOCK(nv_linux_workqueue_lock);
 +static LIST_HEAD(nv_linux_workqueue_items);
 +static DECLARE_WAIT_QUEUE_HEAD(nv_linux_workqueue_worker_wait);
 +static DECLARE_WAIT_QUEUE_HEAD(nv_linux_workqueue_flush_wait);
++static DECLARE_WAIT_QUEUE_HEAD(nv_linux_workqueue_shutdown_wait);
 +static struct task_struct *nv_linux_workqueue_thread;
-+static NvBool nv_linux_workqueue_stopping;
++static nv_linux_workqueue_state_t nv_linux_workqueue_state = NV_WQ_UNINITIALIZED;
 +static NvU64 nv_linux_workqueue_next_sequence;
 +static NvU64 nv_linux_workqueue_completed_sequence;
 +
@@ -125,6 +142,19 @@
 +
 +    spin_lock_irqsave(&nv_linux_workqueue_lock, flags);
 +    ret = (nv_linux_workqueue_completed_sequence >= barrier);
++    spin_unlock_irqrestore(&nv_linux_workqueue_lock, flags);
++
++    return ret;
++}
++
++static NvBool nv_linux_workqueue_shutdown_done(void)
++{
++    NvBool ret;
++    unsigned long flags;
++
++    spin_lock_irqsave(&nv_linux_workqueue_lock, flags);
++    ret = (nv_linux_workqueue_state == NV_WQ_STOPPED) ||
++          (nv_linux_workqueue_state == NV_WQ_UNINITIALIZED);
 +    spin_unlock_irqrestore(&nv_linux_workqueue_lock, flags);
 +
 +    return ret;
@@ -185,9 +215,6 @@
 +        }
 +    }
 +
-+    spin_lock_irqsave(&nv_linux_workqueue_lock, flags);
-+    nv_linux_workqueue_stopping = NV_TRUE;
-+    spin_unlock_irqrestore(&nv_linux_workqueue_lock, flags);
 +    wake_up_all(&nv_linux_workqueue_flush_wait);
 +
 +    return 0;
@@ -195,31 +222,46 @@
 +
 +int nv_linux_workqueue_init(void)
 +{
++    struct task_struct *thread;
 +    unsigned long flags;
 +
 +    spin_lock_irqsave(&nv_linux_workqueue_lock, flags);
++    if ((nv_linux_workqueue_state == NV_WQ_RUNNING) ||
++        (nv_linux_workqueue_state == NV_WQ_STOPPING))
++    {
++        spin_unlock_irqrestore(&nv_linux_workqueue_lock, flags);
++        return -EBUSY;
++    }
++
 +    INIT_LIST_HEAD(&nv_linux_workqueue_items);
-+    nv_linux_workqueue_stopping = NV_FALSE;
++    nv_linux_workqueue_thread = NULL;
 +    nv_linux_workqueue_next_sequence = 0;
 +    nv_linux_workqueue_completed_sequence = 0;
++    nv_linux_workqueue_state = NV_WQ_STOPPED;
 +    spin_unlock_irqrestore(&nv_linux_workqueue_lock, flags);
 +
-+    nv_linux_workqueue_thread = kthread_create_on_node(nv_linux_workqueue_main,
-+                                                       NULL,
-+                                                       NUMA_NO_NODE,
-+                                                       "nvidia-wq");
-+    if (IS_ERR(nv_linux_workqueue_thread))
++    thread = kthread_create_on_node(nv_linux_workqueue_main,
++                                    NULL,
++                                    NUMA_NO_NODE,
++                                    "nvidia-wq");
++    if (IS_ERR(thread))
 +    {
-+        int rc = PTR_ERR(nv_linux_workqueue_thread);
++        int rc = PTR_ERR(thread);
 +
-+        nv_linux_workqueue_thread = NULL;
 +        spin_lock_irqsave(&nv_linux_workqueue_lock, flags);
-+        nv_linux_workqueue_stopping = NV_TRUE;
++        nv_linux_workqueue_thread = NULL;
++        nv_linux_workqueue_state = NV_WQ_STOPPED;
 +        spin_unlock_irqrestore(&nv_linux_workqueue_lock, flags);
++        wake_up_all(&nv_linux_workqueue_shutdown_wait);
 +        return rc;
 +    }
 +
-+    wake_up_process(nv_linux_workqueue_thread);
++    spin_lock_irqsave(&nv_linux_workqueue_lock, flags);
++    nv_linux_workqueue_thread = thread;
++    nv_linux_workqueue_state = NV_WQ_RUNNING;
++    spin_unlock_irqrestore(&nv_linux_workqueue_lock, flags);
++
++    wake_up_process(thread);
 +    return 0;
 +}
 +
@@ -229,7 +271,8 @@
 +    int accepted = 0;
 +
 +    spin_lock_irqsave(&nv_linux_workqueue_lock, flags);
-+    if ((nv_linux_workqueue_thread != NULL) && !nv_linux_workqueue_stopping &&
++    if ((nv_linux_workqueue_thread != NULL) &&
++        (nv_linux_workqueue_state == NV_WQ_RUNNING) &&
 +        !task->queued && (task->requeueable || (task->queued_sequence == 0)))
 +    {
 +        task->queued_sequence = ++nv_linux_workqueue_next_sequence;
@@ -245,7 +288,7 @@
 +    return accepted;
 +}
 +
-+int nv_linux_workqueue_flush(void)
++static int nv_linux_workqueue_flush_once(void)
 +{
 +    NvU64 barrier;
 +    unsigned long flags;
@@ -267,6 +310,16 @@
 +    return 0;
 +}
 +
++int nv_linux_workqueue_flush(void)
++{
++    int rc;
++
++    rc = nv_linux_workqueue_flush_once();
++    if (rc != 0)
++        return rc;
++
++    return nv_linux_workqueue_flush_once();
++}
 +
 +int nv_linux_workqueue_shutdown(void)
 +{
@@ -282,7 +335,26 @@
 +                  "NVRM: nv_linux_workqueue_shutdown: called from worker thread\n");
 +        return -EDEADLK;
 +    }
-+    nv_linux_workqueue_stopping = NV_TRUE;
++
++    if ((nv_linux_workqueue_state == NV_WQ_UNINITIALIZED) ||
++        (nv_linux_workqueue_state == NV_WQ_STOPPED))
++    {
++        nv_linux_workqueue_state = NV_WQ_STOPPED;
++        nv_linux_workqueue_thread = NULL;
++        spin_unlock_irqrestore(&nv_linux_workqueue_lock, flags);
++        wake_up_all(&nv_linux_workqueue_shutdown_wait);
++        return 0;
++    }
++
++    if (nv_linux_workqueue_state == NV_WQ_STOPPING)
++    {
++        spin_unlock_irqrestore(&nv_linux_workqueue_lock, flags);
++        wait_event(nv_linux_workqueue_shutdown_wait,
++            nv_linux_workqueue_shutdown_done());
++        return 0;
++    }
++
++    nv_linux_workqueue_state = NV_WQ_STOPPING;
 +    spin_unlock_irqrestore(&nv_linux_workqueue_lock, flags);
 +
 +    wake_up(&nv_linux_workqueue_worker_wait);
@@ -296,7 +368,10 @@
 +
 +    spin_lock_irqsave(&nv_linux_workqueue_lock, flags);
 +    nv_linux_workqueue_thread = NULL;
++    nv_linux_workqueue_state = NV_WQ_STOPPED;
 +    spin_unlock_irqrestore(&nv_linux_workqueue_lock, flags);
++
++    wake_up_all(&nv_linux_workqueue_shutdown_wait);
 +
 +    return 0;
 +}
@@ -304,7 +379,7 @@
  NvU32 nv_assign_gpu_count = 0;
  nv_pci_info_t nv_assign_gpu_pci_info[NV_MAX_DEVICES];
 
-@@ -682,12 +886,22 @@
+@@ -682,12 +953,21 @@
          goto failed5;
      }
 
@@ -321,56 +396,46 @@
 +    {
          nv_printf(NV_DBG_ERRORS, "NVRM: rm_init_rm() failed!\n");
          rc = -EIO;
-+        if (nv_linux_workqueue_shutdown() != 0)
-+            nv_printf(NV_DBG_ERRORS, "NVRM: workqueue shutdown failed during RM init rollback\n");
++        BUG_ON(nv_linux_workqueue_shutdown() != 0);
 +        nv_kmem_cache_free_stack(sp);
 +        NV_KMEM_CACHE_DESTROY(nvidia_stack_t_cache);
          goto failed5;
      }
 
-@@ -985,6 +1199,9 @@
+@@ -985,6 +1265,8 @@
      nv_unregister_chrdev((void *)&nv_fops);
 
  failed4:
-+    if (nv_linux_workqueue_shutdown() != 0)
-+        nv_printf(NV_DBG_ERRORS, "NVRM: workqueue shutdown failed during init rollback\n");
++    BUG_ON(nv_linux_workqueue_shutdown() != 0);
 +
      nv_lock_destroy_locks(sp, nv);
      rm_shutdown_rm(sp);
 
-@@ -1022,6 +1239,9 @@
+@@ -1022,6 +1304,8 @@
 
      nv_unregister_chrdev((void *)&nv_fops);
 
-+    if (nv_linux_workqueue_shutdown() != 0)
-+        nv_printf(NV_DBG_ERRORS, "NVRM: workqueue shutdown failed during module exit\n");
++    BUG_ON(nv_linux_workqueue_shutdown() != 0);
 +
      nv_lock_destroy_locks(sp, nv);
 
      // Shutdown the resource manager
-@@ -1662,7 +1882,11 @@
+@@ -1661,8 +1945,8 @@
+
      if (NV_IS_GVI_DEVICE(nv))
      {
++        BUG_ON(NV_WORKQUEUE_FLUSH_STATUS() != 0);
          rm_shutdown_gvi_device(sp, nv);
 -        NV_WORKQUEUE_FLUSH();
-+        if (NV_WORKQUEUE_FLUSH_STATUS() != 0)
-+        {
-+            nv_printf(NV_DBG_ERRORS, "NVRM: GVI workqueue flush failed; aborting device stop\n");
-+            return;
-+        }
          free_irq(nv->interrupt_line, (void *)nvl);
      }
      else
-@@ -3389,7 +3613,11 @@
+@@ -3389,7 +3673,7 @@
 
      if (NV_IS_GVI_DEVICE(nv))
      {
 -        NV_WORKQUEUE_FLUSH();
-+        if (NV_WORKQUEUE_FLUSH_STATUS() != 0)
-+        {
-+            nv_printf(NV_DBG_ERRORS, "NVRM: GVI workqueue flush failed; aborting device removal\n");
-+            return;
-+        }
++        BUG_ON(NV_WORKQUEUE_FLUSH_STATUS() != 0);
          rm_gvi_detach_device(sp, nv);
          rm_gvi_free_private_state(sp, nv);
      }
