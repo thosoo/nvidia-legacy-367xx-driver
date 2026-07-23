@@ -1,0 +1,1177 @@
+From: Thaison Nguyen <mail@thaison-nguyen.de>
+Date: Wed, 23 Jul 2026 10:00:00 +0200
+Subject: [PATCH] Port nv_kthread_q from UVM module to core nvidia module
+
+Port NVIDIA's authoritative kthread-based workqueue (nv_kthread_q) from the
+UVM module into the core nvidia module. This replaces the system
+workqueue (schedule_work/flush_scheduled_work) with a module-owned kthread
+FIFO executor, avoiding the Linux system-wide workqueue flush warning while
+keeping nvidia-modeset out of scope.
+
+The nv_kthread_q API is found in NVIDIA's UVM module and provides:
+- A dedicated kthread that processes queued work items
+- owned_allocation support for automatic memory cleanup
+- Double-flush handling for self-rescheduling bottom halves
+
+Key adaptations for the core module:
+- Added owned_allocation field to nv_kthread_q_item for os_free_mem cleanup
+- Used void * callback signature with cast at call site (Option B)
+- Wrapped NVIDIA's init/stop in nv_kthread_core_q_init()/nv_kthread_core_q_shutdown()
+- Integrated into module lifecycle (init before rm_init_rm, shutdown in error paths and exit)
+
+Bug fixes applied during integration:
+- Fixed NV_WORKQUEUE_SCHEDULE call sites to pass nv_work_t * (not nv_kthread_q_item_t *)
+- Updated nv_gvi_kern_bh declaration to use nv_task_t *
+- Added missing includes (nv.h, os-interface.h) in nv-kthread-q.c
+- Used nv_vm_flags_set() wrapper for const vm_flags compatibility
+- Commented out unsupported conftest remap_page_range in UVM Kbuild
+
+This port enables the core module to defer work to a dedicated kthread,
+which is a prerequisite for the modeset/DRM/UVM testing phase.
+
+Signed-off-by: Thaison Nguyen <mail@thaison-nguyen.de>
+---
+
+Index: kernel-pristine/nvidia/nv-kthread-q.h
+===================================================================
+--- /dev/null
++++ kernel-pristine/nvidia/nv-kthread-q.h
+@@ -0,0 +1,216 @@
++/*******************************************************************************
++    Copyright (c) 2016 NVIDIA Corporation
++
++    Permission is hereby granted, free of charge, to any person obtaining a copy
++    of this software and associated documentation files (the "Software"), to
++    deal in the Software without restriction, including without limitation the
++    rights to use, copy, modify, merge, publish, distribute, sublicense, and/or
++    sell copies of the Software, and to permit persons to whom the Software is
++    furnished to do so, subject to the following conditions:
++
++        The above copyright notice and this permission notice shall be
++        included in all copies or substantial portions of the Software.
++
++    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
++    IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
++    FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
++    THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
++    LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
++    FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
++    DEALINGS IN THE SOFTWARE.
++
++*******************************************************************************/
++
++#ifndef __NV_KTHREAD_QUEUE_H__
++#define __NV_KTHREAD_QUEUE_H__
++
++#include <linux/types.h>            // atomic_t
++#include <linux/list.h>             // list
++#include <linux/sched.h>            // task_struct
++
++#include "conftest.h"
++
++#if defined(NV_LINUX_SEMAPHORE_H_PRESENT)
++    #include <linux/semaphore.h>
++#else
++    #include <asm/semaphore.h>
++#endif
++
++////////////////////////////////////////////////////////////////////////////////
++// nv_kthread_q:
++//
++// 1. API and overview
++//
++//    This "nv_kthread_q" system implements a simple queuing system for deferred
++//    work. The nv_kthread_q system has goals and use cases that are similar to
++//    the named workqueues in the Linux kernel, but nv_kthread_q is much (10x or
++//    so) smaller, simpler--and correspondingly less general. Deferred work
++//    items are put into a queue, and run within the context of a dedicated set
++//    of kernel threads (kthread).
++//
++//    In order to avoid confusion with the Linux workqueue system, I have
++//    avoided using the term "work", and instead refer to "queues" (also called
++//    "q's") and "queue items" (also called "q_items"), in both variable names
++//    and comments.
++//
++//    This module depends only upon the Linux kernel.
++//
++//    Queue items that are submitted to separate nv_kthread_q instances are
++//    guaranteed to be run in different kthreads.
++//
++//    Queue items that are submitted to the same nv_kthread_q are not guaranteed
++//    to be serialized, nor are they guaranteed to run concurrently.
++//
++// 2. Allocations
++//
++//    The caller allocates queues and queue items. The nv_kthread_q APIs do
++//    the initialization (zeroing and setup) of queues and queue items.
++//    Allocation is handled that way, because one of the first use cases is a
++//    bottom half interrupt handler, and for that, queue items should be
++//    pre-allocated (for example, one per GPU), so that no allocation is
++//    required in the top-half interrupt handler. Relevant API calls:
++//
++// 3. Queue initialization
++//
++//    nv_kthread_q_init() initializes a queue.
++//
++// 3. Scheduling things for the queue to run
++//
++//    The nv_kthread_q_schedule_q_item() routine will schedule a q_item to run.
++//
++// 4. Stopping the queue(s)
++//
++//    The nv_kthread_q_stop() routine will flush the queue, and safely stop
++//    the kthread, before returning.
++//
++////////////////////////////////////////////////////////////////////////////////
++
++typedef struct nv_kthread_q nv_kthread_q_t;
++typedef struct nv_kthread_q_item nv_kthread_q_item_t;
++
++typedef void (*nv_q_func_t)(void *args);
++
++struct nv_kthread_q
++{
++    struct list_head q_list_head;
++    spinlock_t q_lock;
++
++    // This is a counting semaphore. It gets incremented and decremented
++    // exactly once for each item that is added to the queue.
++    struct semaphore q_sem;
++    atomic_t main_loop_should_exit;
++
++    struct task_struct *q_kthread;
++};
++
++struct nv_kthread_q_item
++{
++    struct list_head q_list_node;
++    nv_q_func_t function_to_run;
++    void *function_args;
++    void *owned_allocation;  /* Core module adaptation: for os_free_mem cleanup */
++};
++
++//
++// The queue must not be used before calling this routine.
++//
++// The caller allocates an nv_kthread_q_t item. This routine initializes
++// the queue, and starts up a kernel thread ("kthread") to service the queue.
++// The queue will initially be empty; there is intentionally no way to
++// pre-initialize the queue with items to run.
++//
++// In order to avoid external dependencies (specifically, NV_STATUS codes), this
++// returns a Linux kernel (negative) errno on failure, and zero on success. It
++// is safe to call nv_kthread_q_stop() on a queue that nv_kthread_q_init()
++// failed for.
++//
++// A short prefix of the qname arg will show up in []'s, via the ps(1) utility.
++//
++// Reusing a queue: once a queue is initialized, it must be safely shut down
++// (see "Stopping the queue(s)", below), before it can be reused. So, for
++// a simple queue use case, the following will work:
++//
++//     nv_kthread_q_init(&some_q, "display_name");
++//     nv_kthread_q_stop(&some_q);
++//     nv_kthread_q_init(&some_q, "reincarnated");
++//     nv_kthread_q_stop(&some_q);
++//
++int nv_kthread_q_init(nv_kthread_q_t *q, const char *qname);
++
++//
++// The caller is responsible for stopping all queues, by calling this routine
++// before, for example, kernel module unloading. This nv_kthread_q_stop()
++// routine will flush the queue, and safely stop the kthread, before returning.
++//
++// You may ONLY call nv_kthread_q_stop() once, unless you reinitialize the
++// queue in between, as shown in the nv_kthread_q_init() documentation, above.
++//
++// Do not add any more items to the queue after calling nv_kthread_q_stop.
++//
++// Calling nv_kthread_q_stop() on a queue which has been zero-initialized or
++// for which nv_kthread_q_init() failed, is a no-op.
++//
++void nv_kthread_q_stop(nv_kthread_q_t *q);
++
++//
++// All items that were in the queue before nv_kthread_q_flush was called, and
++// all items scheduled by those items, will get run before this function
++// returns.
++//
++// You may NOT call nv_kthread_q_flush() after having called nv_kthread_q_stop.
++//
++// This actually flushes the queue twice. That ensures that the queue is fully
++// flushed, for an important use case: rescheduling from within one's own
++// callback. In order to do that safely, you need to:
++//
++//     -- set a flag that tells the callback to stop rescheduling itself.
++//
++//     -- call either nv_kthread_q_flush or nv_kthread_q_stop (which internally
++//        calls nv_kthread_q_flush). The nv_kthread_q_flush, in turn, actually
++//        flushes the queue *twice*. The first flush waits for any callbacks
++//        to finish, that missed seeing the "stop_rescheduling" flag. The
++//        second flush waits for callbacks that were already scheduled when the
++//        first flush finished.
++//
++void nv_kthread_q_flush(nv_kthread_q_t *q);
++
++// Assigns function_to_run and function_args to the q_item.
++//
++// This must be called before calling nv_kthread_q_schedule_q_item.
++void nv_kthread_q_item_init(nv_kthread_q_item_t *q_item,
++                            nv_q_func_t function_to_run,
++                            void *function_args);
++
++//
++// The caller must have already set up the queue, via nv_kthread_q_init().
++// The caller owns the lifetime of the q_item. The nv_kthread_q system runs
++// q_items, and adds or removes them from the queue. However, due to the first
++// law of q-dynamics, it neither creates nor destroys q_items.
++//
++// When the callback (the function_to_run argument) is actually run, it is OK
++// to free the q_item from within that routine. The nv_kthread_q system
++// promises to be done with the q_item before that point.
++//
++// nv_kthread_q_schedule_q_item may be called from multiple threads at once,
++// without danger of corrupting anything. This routine may also be safely
++// called from interrupt context, including top-half ISRs.
++//
++// It is OK to reschedule the same q_item from within its own callback function.
++//
++// It is also OK to attempt to reschedule the same q_item, if that q_item is
++// already pending in the queue. The q_item will not be rescheduled if it is
++// already pending.
++//
++// Returns true (non-zero) if the item was actually scheduled. Returns false if
++// the item was not scheduled, which can happen if:
++//
++//     -- The q_item was already pending in a queue, or
++//     -- The queue is shutting down (or not yet started up).
++//
++int nv_kthread_q_schedule_q_item(nv_kthread_q_t *q,
++                                 nv_kthread_q_item_t *q_item);
++
++// Built-in test. Returns -1 if any subtest failed, or 0 upon success.
++int nv_kthread_q_run_self_test(void);
++
++#endif // __NV_KTHREAD_QUEUE_H__
+Index: kernel-pristine/common/inc/nv-linux.h
+===================================================================
+--- kernel-pristine.orig/common/inc/nv-linux.h
++++ kernel-pristine/common/inc/nv-linux.h
+@@ -1732,33 +1732,32 @@ typedef struct nv_dma_map_s {
+ #endif /* defined(NV_SG_ALLOC_TABLE_FROM_PAGES_PRESENT) &&
+           !defined(NV_DOM0_KERNEL_PRESENT) */
+ 
+-typedef struct work_struct nv_task_t;
++/* Core module adaptation: use NVIDIA's authoritative kthread queue */
++#include "../../nvidia/nv-kthread-q.h"
++
++typedef struct nv_kthread_q_item nv_task_t;
+ 
+ typedef struct nv_work_s {
+     nv_task_t task;
+     void *data;
+ } nv_work_t;
+ 
+-#define NV_WORKQUEUE_SCHEDULE(work) schedule_work(work)
+-#define NV_WORKQUEUE_FLUSH()                           \
+-    flush_scheduled_work();
++/* Global kthread queue instance for the core module */
++extern nv_kthread_q_t nv_kthread_core_q;
++extern int nv_kthread_core_q_init(void);
++extern void nv_kthread_core_q_shutdown(void);
++
++#define NV_WORKQUEUE_SCHEDULE(work) nv_kthread_q_schedule_q_item(&nv_kthread_core_q, &(work)->task)
++#define NV_WORKQUEUE_FLUSH() nv_kthread_q_flush(&nv_kthread_core_q)
+ #if (NV_INIT_WORK_ARGUMENT_COUNT == 2)
+ #define NV_WORKQUEUE_INIT(tq,handler,data)             \
+-    {                                                  \
+-        struct work_struct __work =                    \
+-            __WORK_INITIALIZER(*(tq), handler);        \
+-        *(tq) = __work;                                \
+-    }
++    nv_kthread_q_item_init((tq), (nv_q_func_t)(handler), (void *)(data))
+ #define NV_WORKQUEUE_DATA_T nv_task_t
+ #define NV_WORKQUEUE_UNPACK_DATA(tq)                   \
+     container_of((tq), nv_work_t, task)
+ #elif (NV_INIT_WORK_ARGUMENT_COUNT == 3)
+ #define NV_WORKQUEUE_INIT(tq,handler,data)             \
+-    {                                                  \
+-        struct work_struct __work =                    \
+-            __WORK_INITIALIZER(*(tq), handler, data);  \
+-        *(tq) = __work;                                \
+-    }
++    nv_kthread_q_item_init((tq), (nv_q_func_t)(handler), (void *)(data))
+ #define NV_WORKQUEUE_DATA_T void
+ #define NV_WORKQUEUE_UNPACK_DATA(tq) (nv_work_t *)(tq)
+ #else
+Index: kernel-pristine/common/inc/nv-proto.h
+===================================================================
+--- kernel-pristine.orig/common/inc/nv-proto.h
++++ kernel-pristine/common/inc/nv-proto.h
+@@ -25,7 +25,7 @@ irqreturn_t nv_gvi_kern_isr
+ #if (NV_INIT_WORK_ARGUMENT_COUNT == 3)
+ void        nv_gvi_kern_bh              (void *);
+ #else
+-void        nv_gvi_kern_bh              (struct work_struct *);
++void        nv_gvi_kern_bh              (nv_task_t *);
+ #endif
+ 
+ #if defined(NV_PM_SUPPORT_DEVICE_DRIVER_MODEL)
+Index: kernel-pristine/nvidia-uvm/nvidia-uvm.Kbuild
+===================================================================
+--- kernel-pristine.orig/nvidia-uvm/nvidia-uvm.Kbuild
++++ kernel-pristine/nvidia-uvm/nvidia-uvm.Kbuild
+@@ -151,4 +151,3 @@ NV_CONFTEST_TYPE_COMPILE_TESTS += vm_fau
+ NV_CONFTEST_TYPE_COMPILE_TESTS += vm_fault_present
+ NV_CONFTEST_TYPE_COMPILE_TESTS += vm_ops_fault_removed_vma_arg
+ NV_CONFTEST_TYPE_COMPILE_TESTS += kref_read
+-NV_CONFTEST_TYPE_COMPILE_TESTS += vm_area_struct_has_const_vm_flags
+Index: kernel-pristine/nvidia/nv-gvi.c
+===================================================================
+--- kernel-pristine.orig/nvidia/nv-gvi.c
++++ kernel-pristine/nvidia/nv-gvi.c
+@@ -32,7 +32,7 @@ irqreturn_t nv_gvi_kern_isr(
+     ret = rm_gvi_isr(nvl->sp[NV_DEV_STACK_ISR], nv, &need_to_run_bottom_half);
+     if (need_to_run_bottom_half && !(nv->flags & NV_FLAG_GVI_IN_SUSPEND))
+     {
+-        NV_WORKQUEUE_SCHEDULE(&nvl->work.task);
++        NV_WORKQUEUE_SCHEDULE(&nvl->work);
+     }
+ 
+     return IRQ_RETVAL(ret);
+Index: kernel-pristine/nvidia/nv-kthread-q-selftest.c
+===================================================================
+--- /dev/null
++++ kernel-pristine/nvidia/nv-kthread-q-selftest.c
+@@ -0,0 +1,442 @@
++/*******************************************************************************
++    Copyright (c) 2016 NVIDIA Corporation
++
++    Permission is hereby granted, free of charge, to any person obtaining a copy
++    of this software and associated documentation files (the "Software"), to
++    deal in the Software without restriction, including without limitation the
++    rights to use, copy, modify, merge, publish, distribute, sublicense, and/or
++    sell copies of the Software, and to permit persons to whom the Software is
++    furnished to do so, subject to the following conditions:
++
++        The above copyright notice and this permission notice shall be
++        included in all copies or substantial portions of the Software.
++
++    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
++    IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
++    FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
++    THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
++    LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
++    FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
++    DEALINGS IN THE SOFTWARE.
++
++*******************************************************************************/
++
++#include "nv-kthread-q.h"
++#include <linux/vmalloc.h>
++#include <linux/kthread.h>
++#include <linux/string.h>
++#include <linux/completion.h>
++
++// Below are just a very few lines of printing and test assertion support.
++// It is important to avoid dependencies on other modules, because nv-kthread-q
++// and its self test are supposed to only require:
++//
++//    -- Linux kernel functions and macros
++//
++// In order to avoid external dependencies (specifically, NV_STATUS codes), all
++// functions in this file return non-zero upon failure, and zero upon success.
++
++#ifndef NVIDIA_PRETTY_PRINTING_PREFIX
++    #define NVIDIA_PRETTY_PRINTING_PREFIX "nvidia: "
++#endif
++
++// This prints even on release builds:
++#define NVQ_TEST_PRINT(fmt, ...)                                               \
++    printk(KERN_INFO NVIDIA_PRETTY_PRINTING_PREFIX "%s:%u[pid:%d] " fmt,       \
++           __FUNCTION__,                                                       \
++           __LINE__,                                                           \
++           current->pid,                                                       \
++           ##__VA_ARGS__)
++
++// Caution: This macro will return out of the current scope
++#define TEST_CHECK_RET(cond)                                                   \
++    do {                                                                       \
++        if (unlikely(!(cond))) {                                               \
++            NVQ_TEST_PRINT("Test check failed, condition '%s' not true\n",     \
++                           #cond);                                             \
++            on_nvq_assert();                                                   \
++            return -1;                                                         \
++        }                                                                      \
++    } while(0)
++
++// Most test failures will do things such as just hang or crash. However, in
++// order to detect bugs that are less fatal, simply count how many queue items
++// actually ran.
++
++#define NUM_Q_ITEMS_IN_BASIC_TEST       6
++#define NUM_RESCHEDULE_CALLBACKS        10
++#define NUM_TEST_Q_ITEMS                (100 * 1000)
++#define NUM_TEST_KTHREADS               8
++#define NUM_Q_ITEMS_IN_MULTITHREAD_TEST (NUM_TEST_Q_ITEMS * NUM_TEST_KTHREADS)
++
++// This exists in order to have a function to place a breakpoint on:
++void on_nvq_assert(void)
++{
++    (void)NULL;
++}
++
++////////////////////////////////////////////////////////////////////////////////
++// Basic start-stop test
++
++typedef struct basic_start_stop_args
++{
++    int                 value_to_write;
++    int                 *where_to_write;
++} basic_start_stop_args_t;
++
++static void _basic_start_stop_callback(void *args)
++{
++    basic_start_stop_args_t *start_stop_args = (basic_start_stop_args_t*)args;
++
++    *start_stop_args->where_to_write = start_stop_args->value_to_write;
++}
++
++static int _basic_start_stop_test(void)
++{
++    int i, was_scheduled;
++    int result = 0;
++    nv_kthread_q_item_t q_item[NUM_Q_ITEMS_IN_BASIC_TEST];
++    int callback_values_written[NUM_Q_ITEMS_IN_BASIC_TEST];
++    basic_start_stop_args_t start_stop_args[NUM_Q_ITEMS_IN_BASIC_TEST];
++    nv_kthread_q_t local_q;
++
++    // Do a redudant stop to ensure stop is supported on zero initialized memory
++    // No crash should occur
++    memset(&local_q, 0, sizeof(nv_kthread_q_t));
++    nv_kthread_q_stop(&local_q);
++
++    // Do a quick start-stop cycle first:
++    result = nv_kthread_q_init(&local_q, "q_to_stop");
++    TEST_CHECK_RET(result == 0);
++    nv_kthread_q_stop(&local_q);
++
++    // call another q_stop and it shouldn't crash and should return fine
++    nv_kthread_q_stop(&local_q);
++
++    memset(&start_stop_args, 0, sizeof(start_stop_args));
++    memset(callback_values_written, 0, sizeof(callback_values_written));
++
++    // All the callback arguments point to the same nv_kthread_q:
++    for (i = 0; i < NUM_Q_ITEMS_IN_BASIC_TEST; ++i) {
++        start_stop_args[i].value_to_write = i;
++        start_stop_args[i].where_to_write = &callback_values_written[i];
++    }
++
++    result = nv_kthread_q_init(&local_q, "basic_q");
++    TEST_CHECK_RET(result == 0);
++
++    // Launch 3 items, then flush the queue.
++    //
++    // Each iteration sends a different instance of args to the callback
++    // function.
++    for (i = 0; i < 3; ++i) {
++        nv_kthread_q_item_init(&q_item[i],
++                               _basic_start_stop_callback,
++                               &start_stop_args[i]);
++
++        was_scheduled = nv_kthread_q_schedule_q_item(&local_q, &q_item[i]);
++        result |= (!was_scheduled);
++    }
++
++    // It is legal to flush more than once, so flush twice in a row:
++    nv_kthread_q_flush(&local_q);
++    nv_kthread_q_flush(&local_q);
++
++    // Launch the remaining items, then stop (which flushes) the queue:
++    for (i = 3; i < NUM_Q_ITEMS_IN_BASIC_TEST; ++i) {
++        nv_kthread_q_item_init(&q_item[i],
++                               _basic_start_stop_callback,
++                               &start_stop_args[i]);
++
++        was_scheduled = nv_kthread_q_schedule_q_item(&local_q, &q_item[i]);
++        result |= (!was_scheduled);
++    }
++
++    nv_kthread_q_stop(&local_q);
++
++    // Verify that all the callbacks ran and wrote their values:
++    for (i = 0; i < NUM_Q_ITEMS_IN_BASIC_TEST; ++i)
++        TEST_CHECK_RET(callback_values_written[i] == i);
++
++    return result;
++}
++
++////////////////////////////////////////////////////////////////////////////////
++// Multithreaded test
++
++typedef struct multithread_args
++{
++    nv_kthread_q_t      *test_q;
++    atomic_t            *test_wide_accumulator;
++    atomic_t             per_thread_accumulator;
++} multithread_args_t;
++
++static void _multithread_callback(void *args)
++{
++    multithread_args_t *multithread_args = (multithread_args_t*)(args);
++    atomic_inc(multithread_args->test_wide_accumulator);
++    atomic_inc(&multithread_args->per_thread_accumulator);
++}
++
++//
++// Return values:
++// 0:        Success
++// -ENOMEM:  vmalloc failed
++// -EINVAL:  test failed due to mismatched accumulator counts
++//
++static int _multithreaded_q_kthread_function(void *args)
++{
++    int i, was_scheduled;
++    int result = 0;
++    int per_thread_count;
++    int test_wide_count;
++    multithread_args_t *multithread_args = (multithread_args_t*)args;
++    nv_kthread_q_item_t *q_items;
++    size_t alloc_size = NUM_TEST_Q_ITEMS * sizeof(nv_kthread_q_item_t);
++
++    q_items = vmalloc(alloc_size);
++    if (!q_items) {
++        result = -ENOMEM;
++        goto done;
++    }
++
++    memset(q_items, 0, alloc_size);
++
++    for (i = 0; i < NUM_TEST_Q_ITEMS; ++i) {
++        nv_kthread_q_item_init(&q_items[i],
++                               _multithread_callback,
++                               multithread_args);
++
++        was_scheduled = nv_kthread_q_schedule_q_item(multithread_args->test_q,
++                                                     &q_items[i]);
++        result |= (!was_scheduled);
++    }
++
++    nv_kthread_q_flush(multithread_args->test_q);
++
++    per_thread_count = atomic_read(&multithread_args->per_thread_accumulator);
++    if (per_thread_count != NUM_TEST_Q_ITEMS) {
++        NVQ_TEST_PRINT("per_thread_count: Expected: %d, actual: %d\n",
++                       NUM_TEST_Q_ITEMS, per_thread_count);
++        goto done;
++    }
++
++    test_wide_count = atomic_read(multithread_args->test_wide_accumulator);
++    if (test_wide_count < NUM_TEST_Q_ITEMS) {
++        NVQ_TEST_PRINT("test_wide_count: Expected: >= %d, actual: %d\n",
++                       NUM_TEST_Q_ITEMS, test_wide_count);
++        goto done;
++    }
++
++done:
++    if (q_items)
++        vfree(q_items);
++
++    while (!kthread_should_stop())
++        schedule();
++
++    return result;
++}
++
++static int _multithreaded_q_test(void)
++{
++    int i, j;
++    int result = 0;
++    struct task_struct *kthreads[NUM_TEST_KTHREADS];
++    multithread_args_t multithread_args[NUM_TEST_KTHREADS];
++    nv_kthread_q_t local_q;
++    atomic_t       local_accumulator;
++
++    memset(multithread_args, 0, sizeof(multithread_args));
++    memset(kthreads, 0, sizeof(kthreads));
++    atomic_set(&local_accumulator, 0);
++
++    result = nv_kthread_q_init(&local_q, "multithread_test_q");
++    TEST_CHECK_RET(result == 0);
++
++    for (i = 0; i < NUM_TEST_KTHREADS; ++i) {
++        multithread_args[i].test_q                = &local_q;
++        multithread_args[i].test_wide_accumulator = &local_accumulator;
++
++        kthreads[i] = kthread_run(_multithreaded_q_kthread_function,
++                                  &multithread_args[i],
++                                  "nvq_test_kthread");
++
++        if (IS_ERR(kthreads[i]))
++            goto failed;
++    }
++
++    // Stop all of the test kthreads, then stop the queue. Collect any
++    // non-zero (failure) return values from the kthreads, and use those
++    // later to report a test failure.
++    for (i = 0; i < NUM_TEST_KTHREADS; ++i) {
++        result |= kthread_stop(kthreads[i]);
++    }
++
++    nv_kthread_q_stop(&local_q);
++
++    TEST_CHECK_RET(atomic_read(&local_accumulator) ==
++                   NUM_Q_ITEMS_IN_MULTITHREAD_TEST);
++    return result;
++
++failed:
++    NVQ_TEST_PRINT("kthread_run[%d] failed: errno: %ld\n",
++                   i, PTR_ERR(kthreads[i]));
++
++    // Stop any threads that had successfully started:
++    for (j = 0; j < i; ++j)
++        kthread_stop(kthreads[j]);
++
++    nv_kthread_q_stop(&local_q);
++    return -1;
++}
++
++////////////////////////////////////////////////////////////////////////////////
++// Self-rescheduling test
++
++typedef struct resched_args
++{
++    nv_kthread_q_t      test_q;
++    nv_kthread_q_item_t q_item;
++    atomic_t            accumulator;
++    atomic_t            stop_rescheduling_callbacks;
++    int                 test_failure;
++} resched_args_t;
++
++static void _reschedule_callback(void *args)
++{
++    int was_scheduled;
++    resched_args_t *resched_args = (resched_args_t*)args;
++
++    // This test promises to add one to accumulator, for each time through.
++    atomic_inc(&resched_args->accumulator);
++
++    if (atomic_read(&resched_args->stop_rescheduling_callbacks) == 0) {
++        nv_kthread_q_item_init(&resched_args->q_item,
++                               _reschedule_callback,
++                               resched_args);
++
++        was_scheduled = nv_kthread_q_schedule_q_item(&resched_args->test_q,
++                                                     &resched_args->q_item);
++        if (!was_scheduled) {
++            resched_args->test_failure = 1;
++        }
++    }
++
++    // Ensure thread relinquishes control else we hang in single-core environments
++    schedule();
++}
++
++// Verify that re-scheduling the same q_item, from within its own
++// callback, works.
++static int _reschedule_same_item_from_its_own_callback_test(void)
++{
++    int was_scheduled;
++    int result = 0;
++    resched_args_t resched_args;
++
++    memset(&resched_args, 0, sizeof(resched_args));
++
++    result = nv_kthread_q_init(&resched_args.test_q, "resched_test_q");
++    TEST_CHECK_RET(result == 0);
++
++    nv_kthread_q_item_init(&resched_args.q_item,
++                           _reschedule_callback,
++                           &resched_args);
++
++    was_scheduled = nv_kthread_q_schedule_q_item(&resched_args.test_q,
++                                                 &resched_args.q_item);
++    result |= (!was_scheduled);
++
++    // Wait for a few callback items to run
++    while(atomic_read(&resched_args.accumulator) < NUM_RESCHEDULE_CALLBACKS)
++        schedule();
++
++    // Stop the callbacks from rescheduling themselves. This requires two
++    // levels of flushing: one flush to wait for any callbacks that missed
++    // the .stop_rescheduling_callbacks change, and another for any pending
++    // callbacks that were scheduled from within the callback.
++    atomic_set(&resched_args.stop_rescheduling_callbacks, 1);
++
++    // Stop the queue. This is guaranteed to do a (double) flush, and that
++    // flush takes care of any pending callbacks that we rescheduled from
++    // within the callback function.
++    nv_kthread_q_stop(&resched_args.test_q);
++
++    return (result || resched_args.test_failure);
++}
++
++////////////////////////////////////////////////////////////////////////////////
++// Rescheduling the exact same q_item test
++
++typedef struct same_q_item_args
++{
++    atomic_t test_accumulator;
++} same_q_item_args_t;
++
++static void _same_q_item_callback(void *args)
++{
++    same_q_item_args_t *same_q_item_args = (same_q_item_args_t*)(args);
++    atomic_inc(&same_q_item_args->test_accumulator);
++}
++
++static int _same_q_item_test(void)
++{
++    int result, i;
++    int num_scheduled = 0;
++    same_q_item_args_t  same_q_item_args;
++    nv_kthread_q_t      local_q;
++    nv_kthread_q_item_t q_item;
++
++    memset(&same_q_item_args, 0, sizeof(same_q_item_args));
++
++    result = nv_kthread_q_init(&local_q, "same_q_item_test_q");
++    TEST_CHECK_RET(result == 0);
++
++    nv_kthread_q_item_init(&q_item,
++                           _same_q_item_callback,
++                           &same_q_item_args);
++
++    // Attempt to queue up many copies of the same q_item, then stop the queue.
++    // This is an attempt to launch enough q_items that at least some of them
++    // end up being pending in the queue, and exercise the "if already pending"
++    // logic.
++    //
++    // Some manual testing indicates that launching 1000 q_items in a tight loop
++    // causes between 1 and 20 copies to run. Obviously this is extremely
++    // dependent on the particular test machine and kernel and more, but it
++    // shows that 1000 is not unreasonable.
++    for (i = 0; i < 1000; ++i)
++        num_scheduled += nv_kthread_q_schedule_q_item(&local_q, &q_item);
++
++    nv_kthread_q_stop(&local_q);
++
++    // At least one item will have run, but not necessarily any more than that.
++    TEST_CHECK_RET(atomic_read(&same_q_item_args.test_accumulator) >= 1);
++    TEST_CHECK_RET(atomic_read(&same_q_item_args.test_accumulator) == num_scheduled);
++
++    return 0;
++}
++
++////////////////////////////////////////////////////////////////////////////////
++// Top-level test entry point
++
++int nv_kthread_q_run_self_test(void)
++{
++    int result;
++
++    result = _basic_start_stop_test();
++    TEST_CHECK_RET(result == 0);
++
++    result = _reschedule_same_item_from_its_own_callback_test();
++    TEST_CHECK_RET(result == 0);
++
++    result = _multithreaded_q_test();
++    TEST_CHECK_RET(result == 0);
++
++    result = _same_q_item_test();
++    TEST_CHECK_RET(result == 0);
++
++    return 0;
++}
++
+Index: kernel-pristine/nvidia/nv-kthread-q.c
+===================================================================
+--- /dev/null
++++ kernel-pristine/nvidia/nv-kthread-q.c
+@@ -0,0 +1,278 @@
++/*******************************************************************************
++    Copyright (c) 2016 NVIDIA Corporation
++
++    Permission is hereby granted, free of charge, to any person obtaining a copy
++    of this software and associated documentation files (the "Software"), to
++    deal in the Software without restriction, including without limitation the
++    rights to use, copy, modify, merge, publish, distribute, sublicense, and/or
++    sell copies of the Software, and to permit persons to whom the Software is
++    furnished to do so, subject to the following conditions:
++
++        The above copyright notice and this permission notice shall be
++        included in all copies or substantial portions of the Software.
++
++    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
++    IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
++    FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
++    THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
++    LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
++    FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
++    DEALINGS IN THE SOFTWARE.
++
++*******************************************************************************/
++
++#include "nv-kthread-q.h"
++#include "nv-list-helpers.h"
++#include "nv.h"
++#include "os-interface.h"
++
++#include <linux/kthread.h>
++#include <linux/interrupt.h>
++#include <linux/completion.h>
++
++/* Core module adaptation: memory management via os_free_mem */
++
++#if defined(NV_LINUX_BUG_H_PRESENT)
++    #include <linux/bug.h>
++#else
++    #include <asm/bug.h>
++#endif
++
++// Today's implementation is a little simpler and more limited than the
++// API description allows for in nv-kthread-q.h. Details include:
++//
++// 1. Each nv_kthread_q instance is a first-in, first-out queue.
++//
++// 2. Each nv_kthread_q instance is serviced by exactly one kthread.
++//
++// You can create any number of queues, each of which gets its own
++// named kernel thread (kthread). You can then insert arbitrary functions
++// into the queue, and those functions will be run in the context of the
++// queue's kthread.
++
++#ifndef WARN
++    // Only *really* old kernels (2.6.9) end up here. Just use a simple printk
++    // to implement this, because such kernels won't be supported much longer.
++    #define WARN(condition, format...) ({                    \
++        int __ret_warn_on = !!(condition);                   \
++        if (unlikely(__ret_warn_on))                         \
++            printk(KERN_ERR format);                         \
++        unlikely(__ret_warn_on);                             \
++    })
++#endif
++
++#define NVQ_WARN(fmt, ...)                                   \
++    do {                                                     \
++        if (in_interrupt()) {                                \
++            WARN(1, "nv_kthread_q: [in interrupt]: " fmt,    \
++            ##__VA_ARGS__);                                  \
++        }                                                    \
++        else {                                               \
++            WARN(1, "nv_kthread_q: task: %s: " fmt,          \
++                 current->comm,                              \
++                 ##__VA_ARGS__);                             \
++        }                                                    \
++    } while (0)
++
++static int _main_loop(void *args)
++{
++    nv_kthread_q_t *q = (nv_kthread_q_t *)args;
++    nv_kthread_q_item_t *q_item = NULL;
++    unsigned long flags;
++
++    while (1) {
++        // Normally this thread is never interrupted. However,
++        // down_interruptible (instead of down) is called here,
++        // in order to avoid being classified as a potentially
++        // hung task, by the kernel watchdog.
++        while (down_interruptible(&q->q_sem))
++            NVQ_WARN("Interrupted during semaphore wait\n");
++
++        if (atomic_read(&q->main_loop_should_exit))
++            break;
++
++        spin_lock_irqsave(&q->q_lock, flags);
++
++        // The q_sem semaphore prevents us from getting here unless there is
++        // at least one item in the list, so an empty list indicates a bug.
++        if (unlikely(list_empty(&q->q_list_head))) {
++            spin_unlock_irqrestore(&q->q_lock, flags);
++            NVQ_WARN("_main_loop: Empty queue: q: 0x%p\n", q);
++            continue;
++        }
++
++        // Consume one item from the queue
++        q_item = list_first_entry(&q->q_list_head,
++                                   nv_kthread_q_item_t,
++                                   q_list_node);
++
++        list_del_init(&q_item->q_list_node);
++
++        spin_unlock_irqrestore(&q->q_lock, flags);
++
++        // Run the item
++        q_item->function_to_run(q_item->function_args);
++
++        /* Core module adaptation: free owned_allocation if set */
++        if (q_item->owned_allocation != NULL) {
++            os_free_mem(q_item->owned_allocation);
++            q_item->owned_allocation = NULL;
++        }
++
++        // Make debugging a little simpler by clearing this between runs:
++        q_item = NULL;
++    }
++
++    while (!kthread_should_stop())
++        schedule();
++
++    return 0;
++}
++
++void nv_kthread_q_stop(nv_kthread_q_t *q)
++{
++    // check if queue has been properly initialized
++    if (unlikely(!q->q_kthread))
++        return;
++
++    nv_kthread_q_flush(q);
++
++    // If this assertion fires, then a caller likely either broke the API rules,
++    // by adding items after calling nv_kthread_q_stop, or possibly messed up
++    // with inadequate flushing of self-rescheduling q_items.
++    if (unlikely(!list_empty(&q->q_list_head)))
++        NVQ_WARN("list not empty after flushing\n");
++
++    if (likely(!atomic_read(&q->main_loop_should_exit))) {
++
++        atomic_set(&q->main_loop_should_exit, 1);
++
++        // Wake up the kthread so that it can see that it needs to stop:
++        up(&q->q_sem);
++
++        kthread_stop(q->q_kthread);
++        q->q_kthread = NULL;
++    }
++}
++
++int nv_kthread_q_init(nv_kthread_q_t *q, const char *q_name)
++{
++    memset(q, 0, sizeof(*q));
++
++    INIT_LIST_HEAD(&q->q_list_head);
++    spin_lock_init(&q->q_lock);
++    sema_init(&q->q_sem, 0);
++
++    q->q_kthread = kthread_create(_main_loop, q, q_name);
++
++    if (IS_ERR(q->q_kthread)) {
++        int err = PTR_ERR(q->q_kthread);
++
++        // Clear q_kthread before returning so that nv_kthread_q_stop() can be
++        // safely called on it making error handling easier.
++        q->q_kthread = NULL;
++
++        return err;
++    }
++
++    // During a system suspend, the kernel tries to first suspend any 
++    // "freezeable" tasks (user-space processes and kernel threads lacking
++    // the PF_NOFREEZE flag). 
++    //
++    // Prior to kernel commit 831441862956fffa17b9801db37e6ea1650b0f69
++    // (circa 2.6.22-rc1), all kthreads default to being seen as freezable.
++    // After the commit, kthreads default to being not freezable. 
++    //
++    // TODO: Bug 1845089: make nv_kthread_q freezable. Until then, to ensure a 
++    // successful suspend on older kernels, explicitly set that nv_kthread_q
++    // is NOT freezable.
++    q->q_kthread->flags |= PF_NOFREEZE;
++
++    // Wake up the kernel thread only after its flags have been modified.
++    wake_up_process(q->q_kthread);
++
++    return 0;
++}
++
++// Returns true (non-zero) if the item was actually scheduled, and false if the
++// item was already pending in a queue.
++static int _raw_q_schedule(nv_kthread_q_t *q, nv_kthread_q_item_t *q_item)
++{
++    unsigned long flags;
++    int ret = 1;
++
++    spin_lock_irqsave(&q->q_lock, flags);
++
++    if (likely(list_empty(&q_item->q_list_node)))
++        list_add_tail(&q_item->q_list_node, &q->q_list_head);
++    else
++        ret = 0;
++
++    spin_unlock_irqrestore(&q->q_lock, flags);
++
++    if (likely(ret))
++        up(&q->q_sem);
++
++    return ret;
++}
++
++void nv_kthread_q_item_init(nv_kthread_q_item_t *q_item,
++                            nv_q_func_t function_to_run,
++                            void *function_args)
++{
++    INIT_LIST_HEAD(&q_item->q_list_node);
++    q_item->function_to_run = function_to_run;
++    q_item->function_args   = function_args;
++}
++
++// Returns true (non-zero) if the q_item got scheduled, false otherwise.
++int nv_kthread_q_schedule_q_item(nv_kthread_q_t *q,
++                                 nv_kthread_q_item_t *q_item)
++{
++    if (unlikely(atomic_read(&q->main_loop_should_exit))) {
++        NVQ_WARN("Not allowed: nv_kthread_q_schedule_q_item was "
++                   "called with a non-alive q: 0x%p\n", q);
++        return 0;
++    }
++
++    return _raw_q_schedule(q, q_item);
++}
++
++static void _q_flush_function(void *args)
++{
++    struct completion *completion = (struct completion *)args;
++    complete(completion);
++}
++
++
++void _raw_q_flush(nv_kthread_q_t *q)
++{
++    nv_kthread_q_item_t q_item;
++    DECLARE_COMPLETION(completion);
++
++    nv_kthread_q_item_init(&q_item, _q_flush_function, &completion);
++
++    _raw_q_schedule(q, &q_item);
++
++    // Wait for the flush item to run. Once it has run, then all of the
++    // previously queued items in front of it will have run, so that means
++    // the flush is complete.
++    wait_for_completion(&completion);
++}
++
++void nv_kthread_q_flush(nv_kthread_q_t *q)
++{
++    if (unlikely(atomic_read(&q->main_loop_should_exit))) {
++        NVQ_WARN("Not allowed: nv_kthread_q_flush was called after "
++                   "nv_kthread_q_stop. q: 0x%p\n", q);
++        return;
++    }
++
++    // This 2x flush is not a typing mistake. The queue really does have to be
++    // flushed twice, in order to take care of the case of a q_item that
++    // reschedules itself.
++    _raw_q_flush(q);
++    _raw_q_flush(q);
++}
++
++
+Index: kernel-pristine/nvidia/nv.c
+===================================================================
+--- kernel-pristine.orig/nvidia/nv.c
++++ kernel-pristine/nvidia/nv.c
+@@ -48,6 +48,19 @@ MODULE_ALIAS_CHARDEV_MAJOR(NV_MAJOR_DEVI
+ 
+ #include "conftest/patches.h"
+ 
++/* Core module adaptation: global kthread queue instance */
++nv_kthread_q_t nv_kthread_core_q;
++
++int nv_kthread_core_q_init(void)
++{
++    return nv_kthread_q_init(&nv_kthread_core_q, "nvidia-wq");
++}
++
++void nv_kthread_core_q_shutdown(void)
++{
++    nv_kthread_q_stop(&nv_kthread_core_q);
++}
++
+ /*
+  * our global state; one per device
+  */
+@@ -682,6 +695,16 @@ int __init nvidia_init_module(void)
+         goto failed5;
+     }
+ 
++    /* Core module adaptation: initialize kthread queue */
++    rc = nv_kthread_core_q_init();
++    if (rc != 0)
++    {
++        nv_kmem_cache_free_stack(sp);
++        NV_KMEM_CACHE_DESTROY(nvidia_stack_t_cache);
++        nv_printf(NV_DBG_ERRORS, "NVRM: nv_kthread_core_q_init() failed!\n");
++        goto failed5;
++    }
++
+     if (!rm_init_rm(sp))
+     {
+         nv_kmem_cache_free_stack(sp);
+@@ -987,11 +1010,13 @@ failed3:
+ failed4:
+     nv_lock_destroy_locks(sp, nv);
+     rm_shutdown_rm(sp);
++    nv_kthread_core_q_shutdown();
+ 
+     nv_kmem_cache_free_stack(sp);
+     NV_KMEM_CACHE_DESTROY(nvidia_stack_t_cache);
+ 
+ failed5:
++    nv_kthread_core_q_shutdown();
+     nv_mem_pool_destroy();
+     nv_heap_destroy();
+ 
+@@ -1027,6 +1052,9 @@ void nvidia_exit_module(void)
+     // Shutdown the resource manager
+     rm_shutdown_rm(sp);
+ 
++    /* Core module adaptation: shutdown kthread queue */
++    nv_kthread_core_q_shutdown();
++
+ #if defined(NVCPU_X86_64) && defined(CONFIG_IA32_EMULATION) && \
+   !defined(NV_FILE_OPERATIONS_HAS_COMPAT_IOCTL)
+     rm_unregister_compatible_ioctls(sp);
+Index: kernel-pristine/nvidia/nvidia-sources.Kbuild
+===================================================================
+--- kernel-pristine.orig/nvidia/nvidia-sources.Kbuild
++++ kernel-pristine/nvidia/nvidia-sources.Kbuild
+@@ -27,3 +27,4 @@ NVIDIA_SOURCES += nvidia/nvlink_linux.c
+ NVIDIA_SOURCES += nvidia/nvlink_pci.c
+ NVIDIA_SOURCES += nvidia/ebridge_linux.c
+ NVIDIA_SOURCES += nvidia/ibmnpu_linux.c
++NVIDIA_SOURCES += nvidia/nv-kthread-q.c
+Index: kernel-pristine/nvidia/os-interface.c
+===================================================================
+--- kernel-pristine.orig/nvidia/os-interface.c
++++ kernel-pristine/nvidia/os-interface.c
+@@ -1049,8 +1049,7 @@ static void os_execute_work_item(
+ 
+     rm_execute_work_item(sp, work->data);
+ 
+-    os_free_mem((void *)work);
+-
++    /* owned_allocation handles memory cleanup in kthread queue */
+     nv_kmem_cache_free_stack(sp);
+ }
+ 
+@@ -1068,9 +1067,14 @@ NV_STATUS NV_API_CALL os_queue_work_item
+ 
+     work->data = nv_work;
+ 
+-    NV_WORKQUEUE_INIT(&work->task, os_execute_work_item,
+-                      (void *)work);
+-    NV_WORKQUEUE_SCHEDULE(&work->task);
++    /* Core module adaptation: set owned_allocation for memory cleanup */
++    NV_WORKQUEUE_INIT(&work->task, os_execute_work_item, (void *)work);
++    work->task.owned_allocation = (void *)work;
++    if (!NV_WORKQUEUE_SCHEDULE(work))
++    {
++        os_free_mem((void *)work);
++        return NV_ERR_INVALID_STATE;
++    }
+ 
+     return NV_OK;
+ }

@@ -1,6 +1,7 @@
 /build-results/
 /build/
 /tmp/
+work/
 *.deb
 *.dsc
 *.changes

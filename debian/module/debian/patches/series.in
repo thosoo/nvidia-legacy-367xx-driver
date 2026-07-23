@@ -79,6 +79,7 @@ backport-uvm-core-api-compat.patch
 # nvidia-drm-helper CRTC iteration producer is inactive; 367.134 lacks nvidia-drm-helper.[ch] and no consumer exists: 0082-backport-for_each_-_crtc_in_state-changes-from-580.1.patch
 # nvidia-drm-helper CRTC iteration fallback is inactive with its producer; no 367.134 consumer exists: 0083-support-fallback-for-for_each_-_crtc_in_state.patch
 
+0084-port-nv-kthread-q-to-core-module.patch
 # build system updates
 conftest-verbose.patch
 use-kbuild-module-directory.patch
