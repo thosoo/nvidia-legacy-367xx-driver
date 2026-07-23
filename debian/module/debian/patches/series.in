@@ -67,7 +67,6 @@ normalize-module-instances-warning.patch
 backport-timekeeping-scheduler-mmap-lock-api.patch
 backport-uvm-mmap-lock-api.patch
 backport-uvm-core-api-compat.patch
-backport-core-system-workqueue-drain.patch
 # Linux 6.1 and 6.12 predate the vma_start_write() change that calls GPL-only __vma_start_write; fallback manipulates private VMA locking/refcount/wait-state internals and remains inactive until Linux 6.15+ enters the tested matrix: 0071-backport-nv_vma_start_write-changes-from-570.169.patch
 # Four-argument drm_mode_config_funcs::fb_create postdates Linux 6.12 and is outside the current Bookworm/Trixie matrix: 0074-backport-drm_fb_create_takes_format_info-changes-fro.patch
 # drm_print.h include probe is inactive until compiler evidence shows a 367 DRM source needs declarations not provided by existing includes on Linux 6.1/6.12: 0075-backport-drm_print.h-changes-from-570.211.01.patch

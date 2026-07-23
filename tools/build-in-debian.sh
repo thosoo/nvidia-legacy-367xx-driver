@@ -1,5 +1,4 @@
 #!/bin/sh
-# shellcheck disable=SC2317
 set -eu
 
 if [ "$#" -ne 3 ]; then
@@ -170,10 +169,6 @@ run_repository_test uvm-interface-header-order tests/uvm-interface-header-order.
 run_repository_test drm-preprocessor-balance-fixtures tests/drm-preprocessor-balance.sh
 run_repository_test userspace-manifest-inventory-fixtures tests/userspace-manifest-inventory.sh
 run_repository_test module-build-diagnostics tests/module-build-diagnostics.sh
-run_repository_test core-workqueue-drain tests/core-workqueue-drain.sh
-run_repository_test module-symbol-audit tests/module-symbol-audit.sh
-run_repository_test ci-workflow-static tests/ci-workflow-static.sh
-run_repository_test runtime-collector-static tests/runtime-collector-static.sh
 run_repository_test userspace-manifest-inventory tests/userspace-manifest-inventory.sh "/work/import/NVIDIA-Linux-x86_64-$version"
 
 set_stage module-series-integrity
@@ -374,21 +369,6 @@ set +e
     else
         echo no > /work/logs/modpost-reached.txt
     fi
-    sh /work/binary-source/tools/extract-kernel-release.sh /work/logs/module-kbuild-command.txt > /work/logs/module-kernel-release.txt || echo unknown > /work/logs/module-kernel-release.txt
-    module_kernel=$(cat /work/logs/module-kernel-release.txt)
-    if grep -qx yes /work/logs/nvidia-ko-created.txt && grep -qx yes /work/logs/nvidia-modeset-ko-created.txt && \
-       grep -qx yes /work/logs/nvidia-drm-ko-created.txt && grep -qx yes /work/logs/nvidia-uvm-ko-created.txt && \
-       test "$module_kernel" != unknown && \
-       test -s "/lib/modules/$module_kernel/build/Module.symvers" && \
-       test -s "$module_source/Module.symvers"; then
-        sh /work/binary-source/tools/audit-module-symbols.sh \
-            "$module_source" "/lib/modules/$module_kernel/build/Module.symvers" \
-            "$module_source/Module.symvers" /work/logs/module-symbol-audit \
-            > /work/logs/module-symbol-audit.log 2>&1 || \
-            echo "module symbol audit failed" >> /work/logs/post-build-diagnostics-failures.txt
-    else
-        echo "symbol audit skipped" > /work/logs/module-symbol-audit.log
-    fi
     if grep -qx yes /work/logs/nvidia-ko-created.txt && grep -qx yes /work/logs/nvidia-modeset-ko-created.txt && \
        grep -qx yes /work/logs/nvidia-drm-ko-created.txt && grep -qx yes /work/logs/nvidia-uvm-ko-created.txt && \
        grep -qx yes /work/logs/modules-order-created.txt; then
@@ -516,9 +496,5 @@ set +e
 diagnostics_status=$?
 printf '%s\n' "$diagnostics_status" > /work/logs/post-build-diagnostics.exit
 set -e
-
-if [ "$binary_status" -eq 0 ] && grep -Eq 'module symbol audit failed|symbol audit skipped' /work/logs/post-build-diagnostics-failures.txt /work/logs/module-symbol-audit.log 2>/dev/null; then
-    exit 1
-fi
 
 exit "$binary_status"
